@@ -1,55 +1,157 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Atlantis Folder Sharing (Admin Only)</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Atlantis NAS — Admin</title>
+
+  <!-- Clean Cloud Styles -->
   <link rel="stylesheet" href="styles.css" />
+
+  <!-- Material Icons -->
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+
+  <!-- SweetAlert2 for modals & notifications -->
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+  <!-- Chart.js for storage usage -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
 </head>
 <body>
-  <header>
-    <h1>🌊 Atlantis Folder Sharing</h1>
-  </header>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">🌥️</div>
+        <div>
+          <h1>Atlantis NAS</h1>
+          <small>Admin Panel</small>
+        </div>
+      </div>
 
-  <!-- Login Section -->
-  <section id="login-section">
-    <h2>🔐 Login Admin</h2>
-    <form id="login-form">
-      <input type="email" id="login-email" placeholder="Email" required />
-      <input type="password" id="login-password" placeholder="Password" required />
-      <button type="submit">Login</button>
-    </form>
-    <p id="login-error" class="error"></p>
-  </section>
+      <nav>
+        <button class="nav-btn active" data-view="folders"><span class="material-icons">folder</span> Folder</button>
+        <button class="nav-btn" data-view="files"><span class="material-icons">description</span> Files</button>
+        <button class="nav-btn" data-view="storage"><span class="material-icons">bar_chart</span> Storage</button>
+        <button class="nav-btn" data-view="activity"><span class="material-icons">history</span> Activity</button>
+      </nav>
 
-  <!-- Main App (hidden until login) -->
-  <main id="app-section" style="display:none;">
-    <div class="user-info">
-      <p id="user-info"></p>
-      <button id="logout-btn">Logout</button>
+      <div class="sidebar-foot">
+        <small id="user-info">—</small>
+        <button id="logout-btn" class="ghost">Logout</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- Toolbar -->
+      <header class="toolbar">
+        <div class="left">
+          <div class="breadcrumb">Home / <span id="breadcrumb-current">Folders</span></div>
+          <div class="search-wrap">
+            <input id="search-box" placeholder="Cari folder atau file..." />
+            <button id="clear-search" title="Bersihkan"><span class="material-icons">close</span></button>
+          </div>
+        </div>
+
+        <div class="right">
+          <select id="sort-select" title="Urutkan">
+            <option value="createdAt_desc">Terbaru</option>
+            <option value="createdAt_asc">Terlama</option>
+            <option value="name_asc">Nama A → Z</option>
+            <option value="name_desc">Nama Z → A</option>
+            <option value="size_desc">Ukuran besar</option>
+            <option value="size_asc">Ukuran kecil</option>
+          </select>
+
+          <button id="upload-btn" class="primary">+ Upload</button>
+          <label class="upload-area" id="drag-area" title="Drag & drop files di sini">
+            <input id="file-input" type="file" multiple hidden />
+            <span class="material-icons">file_upload</span>
+          </label>
+        </div>
+      </header>
+
+      <!-- CONTENT VIEWS -->
+      <section id="view-folders" class="view view-active">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Folder</h2>
+            <form id="folder-form" class="inline-form">
+              <input id="folder-name" placeholder="Nama folder baru..." required />
+              <button type="submit" class="secondary">Buat</button>
+            </form>
+          </div>
+
+          <div id="folder-grid" class="grid"></div>
+        </div>
+      </section>
+
+      <section id="view-files" class="view">
+        <div class="panel">
+          <div class="panel-head">
+            <h2 id="folder-title">Pilih folder</h2>
+            <div class="bulk-controls">
+              <input type="checkbox" id="select-all" />
+              <label for="select-all">Pilih semua</label>
+              <button id="download-selected" class="secondary">Unduh</button>
+              <button id="delete-selected" class="danger">Hapus</button>
+            </div>
+          </div>
+
+          <div id="file-grid" class="grid"></div>
+        </div>
+      </section>
+
+      <section id="view-storage" class="view">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Storage</h2>
+            <div id="storage-summary">Menghitung...</div>
+          </div>
+
+          <div class="storage-area">
+            <canvas id="storage-chart" height="120"></canvas>
+            <div class="storage-bar-wrap">
+              <div class="storage-bar">
+                <div id="storage-used" class="storage-used" style="width:0%"></div>
+              </div>
+              <div class="storage-numbers">
+                <small id="storage-used-text">0 B</small>
+                <small id="storage-total-text">—</small>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-activity" class="view">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Activity Log</h2>
+            <small>Riwayat upload / delete / rename</small>
+          </div>
+          <ul id="activity-list" class="activity-list"></ul>
+        </div>
+      </section>
+
+      <footer class="main-foot">
+        <small>© 2025 Atlantis Store — Clean Cloud</small>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Preview Modal (hidden) -->
+  <div id="preview-modal" class="modal">
+    <div class="modal-inner">
+      <button id="preview-close" class="modal-close material-icons">close</button>
+      <div id="preview-body" class="preview-body"></div>
+      <div id="preview-meta" class="preview-meta"></div>
     </div>
+  </div>
 
-    <section id="folders-section">
-      <h2>📁 Folder</h2>
-      <form id="folder-form">
-        <input type="text" id="folder-name" placeholder="Nama folder baru..." required />
-        <button type="submit">Buat Folder</button>
-      </form>
-      <ul id="folder-list"></ul>
-    </section>
+  <!-- Toast placeholder (SweetAlert2 used) -->
 
-    <section id="files-section">
-      <h2 id="folder-title">🗂 Pilih Folder</h2>
-      <input type="file" id="file-input" hidden />
-      <button id="upload-btn" disabled>📤 Upload File</button>
-      <ul id="file-list"></ul>
-    </section>
-  </main>
-
-  <footer>
-    <p>© 2025 Atlantis Store - Secure Admin File Sharing</p>
-  </footer>
-
+  <!-- App script (module) -->
   <script type="module" src="app.js"></script>
 </body>
 </html>
