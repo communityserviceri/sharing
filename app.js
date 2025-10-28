@@ -15,7 +15,7 @@ import {
   push,
   set,
   onValue,
-  dbGet,
+  get,
   query,
   orderByChild,
   equalTo,
@@ -120,7 +120,7 @@ function safeLog(...a) {
 // --- Role helper: load role from /users/{uid}/role ---
 async function loadUserRole(uid) {
   try {
-    const snap = await dbGet(ref(db, `users/${uid}/role`));
+    const snap = await get(ref(db, `users/${uid}/role`));
     if (snap.exists()) {
       return snap.val();
     } else {
@@ -135,7 +135,7 @@ async function loadUserRole(uid) {
 // --- Default folder structure creation ---
 async function initDefaultStructureIfNeeded() {
   try {
-    const rootSnap = await dbGet(ref(db, "folders"));
+    const rootSnap = await get(ref(db, "folders"));
     if (rootSnap.exists()) {
       // some folders exist; cache them
       const all = rootSnap.val();
@@ -173,7 +173,7 @@ async function initDefaultStructureIfNeeded() {
   try {
     await update(ref(db), updates);
     // refresh cache
-    const snap = await dbGet(ref(db, "folders"));
+    const snap = await get(ref(db, "folders"));
     if (snap.exists()) {
       const all = snap.val();
       Object.keys(all).forEach((k) => (foldersCache[k] = all[k]));
@@ -216,7 +216,7 @@ onAuthStateChanged(auth, async (user) => {
 
     // 🟢 Tambahan: pastikan user sudah ada di RTDB /users
     const userRef = ref(db, `users/${user.uid}`);
-    const userSnap = await dbGet(userRef);
+    const userSnap = await get(userRef);
     if (!userSnap.exists()) {
       await set(userRef, {
         email: user.email,
@@ -446,7 +446,7 @@ async function renderAdminUserPanel() {
   folderTitle.textContent = "👥 Administration - Users";
   // fetch all users
   try {
-    const usersSnap = await dbGet(ref(db, "users"));
+    const usersSnap = await get(ref(db, "users"));
     const users = usersSnap.exists() ? usersSnap.val() : {};
     // render each user as a row in fileList
     Object.entries(users).forEach(([uid, u]) => {
@@ -521,7 +521,7 @@ function loadFilesRealtime() {
 
   // first, read folder metadata (to determine access rules)
   const folderRefPath = currentFolder ? `folders/${currentFolder}` : null;
-  dbGet(ref(db, folderRefPath || "folders")).then(async (folderSnap) => {
+  get(ref(db, folderRefPath || "folders")).then(async (folderSnap) => {
     // fetch files where folderId == currentFolder (note: RTDB doesn't index keys automatically —
     // ensure you've configured indexes if needed in console)
     const filesQuery = query(ref(db, "files"), orderByChild("folderId"), equalTo(currentFolder || null));
@@ -619,7 +619,7 @@ function attachFileRowHandlers() {
         await update(ref(db, `files/${id}`), { deleted: true, deletedAt: Date.now() });
         // decrement folder fileCount transactionally if had folderId
         try {
-          const fSnap = await dbGet(ref(db, `files/${id}`));
+          const fSnap = await get(ref(db, `files/${id}`));
           const fdata = fSnap.exists() ? fSnap.val() : null;
           if (fdata?.folderId) {
             const folderRef = ref(db, `folders/${fdata.folderId}/fileCount`);
@@ -691,7 +691,7 @@ async function bulkDownloadSelected() {
   showToast("Membuka file di tab baru untuk download...");
   for (const id of selected) {
     try {
-      const fdSnap = await dbGet(ref(db, `files/${id}`));
+      const fdSnap = await get(ref(db, `files/${id}`));
       const data = fdSnap.exists() ? fdSnap.val() : null;
       if (data?.url) window.open(data.url, "_blank");
     } catch (err) {
@@ -807,7 +807,7 @@ async function handleMoveFiles(e, targetFolderId) {
   const fileId = e.dataTransfer.getData("text/plain");
   if (!fileId) return;
   try {
-    const fSnap = await dbGet(ref(db, `files/${fileId}`));
+    const fSnap = await get(ref(db, `files/${fileId}`));
     const fdata = fSnap.exists() ? fSnap.val() : null;
     if (!fdata) return;
     const srcFolder = fdata.folderId || null;
@@ -817,7 +817,7 @@ async function handleMoveFiles(e, targetFolderId) {
     }
 
     // check permission: user must have write on target folder
-    const targetFolderSnap = await dbGet(ref(db, `folders/${targetFolderId}`));
+    const targetFolderSnap = await get(ref(db, `folders/${targetFolderId}`));
     const targetMeta = targetFolderSnap.exists() ? targetFolderSnap.val() : null;
     if (!checkFolderWritePermission(targetMeta)) {
       return showToast("Tidak punya izin menaruh file di folder tersebut");
@@ -968,7 +968,7 @@ function loadRecycleBin() {
           await update(ref(db, `files/${id}`), { deleted: false, deletedAt: null });
           // increment folder count if file had folderId
           try {
-            const fd = await dbGet(ref(db, `files/${id}`));
+            const fd = await get(ref(db, `files/${id}`));
             const data = fd.exists() ? fd.val() : null;
             if (data?.folderId) {
               const folderRef = ref(db, `folders/${data.folderId}/fileCount`);
