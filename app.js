@@ -1,13 +1,13 @@
-// === Atlantis NAS — app.rtdb.js (RTDB Edition) ===
-// Replace your existing app.js with this file (or adapt).
-// Uses: Firebase Auth (for login), Firebase Realtime Database (folders/files metadata),
-// and Firebase Storage (actual file blobs).
-//
-// Notes:
-// - parentId uses "root" string for root-level folders (to avoid null issues in RTDB queries).
-// - All users see the same folders/files (global shared NAS).
-// - Recycle uses `deleted: true` on files under /files/{id}.
+// === Atlantis NAS — app.js (updated) ===
+// Features:
+// - Tabs (Files, Recycle Bin, Settings)
+// - Recycle bin (soft delete / restore / permanent delete)
+// - Nested folders (parentId), breadcrumbs, folder-in-folder explorer UI
+// - Real-time listeners via onSnapshot wrapped with safeOnSnapshot
+// - localCreatedAt to reduce duplicate/flash when using serverTimestamp
+// - Upload, move, bulk actions, preview, theme settings, offline persistence
 
+// --- Firebase imports (modular) ---
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
 import {
   getAuth,
@@ -15,31 +15,34 @@ import {
   signOut,
   onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
-
 import {
-  getDatabase,
-  ref as rdbRef,
-  push,
-  set,
-  onValue,
-  update,
-  remove,
-  query as rdbQuery,
-  orderByChild,
-  equalTo,
+  getFirestore,
+  collection,
+  addDoc,
+  onSnapshot,
+  query,
+  where,
+  orderBy,
+  deleteDoc,
+  doc,
+  serverTimestamp,
+  updateDoc,
+  enableIndexedDbPersistence,
+  getDoc,
+  getDocs,
+  limit,
+  increment,
   runTransaction,
-  get as rdbGet,
-} from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
-
+} from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
 import {
   getStorage,
-  ref as storageRef,
+  ref,
   uploadBytesResumable,
   getDownloadURL,
   deleteObject,
 } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-storage.js";
 
-// --- Firebase config (ganti sesuai projectmu) ---
+// --- Firebase config (ganti kalau perlu) ---
 const firebaseConfig = {
   apiKey: "AIzaSyBdKELW2FNsL7H1zB8R765czcDPaSYybdg",
   authDomain: "atlantis-store.firebaseapp.com",
@@ -51,19 +54,25 @@ const firebaseConfig = {
   measurementId: "G-ERXQQKY7HM",
 };
 
-// --- Initialize ---
+// --- Initialize Firebase ---
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const rdb = getDatabase(app);
+const db = getFirestore(app);
 const storage = getStorage(app);
+
+// Enable offline persistence (best-effort)
+enableIndexedDbPersistence(db).catch((err) => {
+  console.warn("Firestore persistence not enabled:", err && err.code ? err.code : err);
+});
 
 // --- App state ---
 let currentUser = null;
-let currentFolder = "root"; // use "root" string for top-level
-let breadcrumbs = [{ id: "root", name: "Root" }];
-let foldersSnapshot = {}; // local cache of folders (key -> data)
-let filesSnapshot = {}; // local cache of files (key -> data)
+let currentFolder = null; // folder id (null => root)
+let folderUnsub = null;
+let fileUnsub = null;
+let breadcrumbs = []; // [{id, name}]
 let bulkControls = null;
+let activeTab = "files"; // "files" | "recycle" | "settings"
 
 // --- DOM refs ---
 const loginSection = document.getElementById("login-section");
@@ -100,13 +109,7 @@ function showToast(msg) {
   setTimeout(() => {
     toast.style.opacity = "0";
     setTimeout(() => (toast.style.display = "none"), 250);
-  }, 2000);
-}
-function el(tag, cls = "", attrs = {}) {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
-  return e;
+  }, 2200);
 }
 function formatBytes(bytes) {
   if (!bytes && bytes !== 0) return "0 B";
@@ -115,9 +118,41 @@ function formatBytes(bytes) {
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
   return (bytes / Math.pow(1024, i)).toFixed(1) + " " + sizes[i];
 }
-function safeLog(...a) { try { console.log(...a); } catch (e) {} }
+function el(tag, cls = "", attrs = {}) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
+  return e;
+}
+function safeLog(...a) {
+  try {
+    console.log(...a);
+  } catch (e) {}
+}
 
-// --- AUTH ---
+// Wrapper for onSnapshot with friendly messaging
+function safeOnSnapshot(q, onData, label = "listener") {
+  try {
+    return onSnapshot(
+      q,
+      (snap) => onData(snap),
+      (err) => {
+        console.warn(`Firestore ${label} error:`, err);
+        if (err && err.code === "failed-precondition") {
+          showToast("⚠️ Firestore: index composite diperlukan. Cek console.");
+        } else if (err && err.code === "permission-denied") {
+          showToast("🚫 Akses ke Firestore ditolak. Periksa rules.");
+        } else {
+          showToast("❌ Koneksi realtime Firestore terganggu.");
+        }
+      }
+    );
+  } catch (e) {
+    console.error("safeOnSnapshot setup failed:", e);
+  }
+}
+
+// --- AUTH FLOW ---
 loginForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   loginError.textContent = "";
@@ -133,6 +168,7 @@ loginForm.addEventListener("submit", async (e) => {
     loginError.textContent = "Login gagal: " + (err.message || err.code);
   }
 });
+
 logoutBtn.addEventListener("click", () => {
   signOut(auth).catch((e) => console.warn("Signout failed:", e));
 });
@@ -140,56 +176,30 @@ logoutBtn.addEventListener("click", () => {
 onAuthStateChanged(auth, (user) => {
   if (user) {
     currentUser = user;
-    document.getElementById("user-info").textContent = user.email || "-";
+    document.getElementById("user-info").textContent = user.email;
     settingsEmail.value = user.email || "";
     loginSection.style.display = "none";
     appSection.removeAttribute("aria-hidden");
-    // reset to root
-    breadcrumbs = [{ id: "root", name: "Root" }];
-    currentFolder = "root";
+    // reset to root view
+    breadcrumbs = [{ id: null, name: "Root" }];
+    currentFolder = null;
+    activeTab = "files";
     renderBreadcrumbs();
-    startRealtimeListeners();
+    setActiveTabUI();
+    // start listeners
+    loadFoldersRealtime();
+    loadFilesRealtime();
   } else {
     currentUser = null;
-    // stop listeners by detaching onValue callbacks is handled by references (onValue returns unsubscribe)
-    // For simplicity we will reload page or let onValue continue but UI hidden.
+    // clean up listeners
+    if (folderUnsub) folderUnsub();
+    if (fileUnsub) fileUnsub();
     appSection.setAttribute("aria-hidden", "true");
     loginSection.style.display = "flex";
   }
 });
 
-// --- Realtime listeners (RTDB) ---
-// We'll listen to /folders and /files and keep local caches foldersSnapshot/filesSnapshot.
-// Rendering filters by currentFolder, deleted flag, etc.
-let foldersUnsub = null;
-let filesUnsub = null;
-
-function startRealtimeListeners() {
-  // folders
-  const fRef = rdbRef(rdb, "folders");
-  // attach listener
-  foldersUnsub = onValue(fRef, (snap) => {
-    const val = snap.val() || {};
-    foldersSnapshot = val;
-    renderFolders();
-  }, (err) => {
-    console.warn("folders onValue error:", err);
-    showToast("Gagal listening folders (RTDB).");
-  });
-
-  // files
-  const filesRef = rdbRef(rdb, "files");
-  filesUnsub = onValue(filesRef, (snap) => {
-    const val = snap.val() || {};
-    filesSnapshot = val;
-    renderFiles();
-  }, (err) => {
-    console.warn("files onValue error:", err);
-    showToast("Gagal listening files (RTDB).");
-  });
-}
-
-// --- Breadcrumbs rendering ---
+// --- Breadcrumbs (render + navigation) ---
 function renderBreadcrumbs() {
   let bc = document.getElementById("breadcrumb");
   if (!bc) {
@@ -209,141 +219,263 @@ function renderBreadcrumbs() {
     crumb.textContent = idx === 0 ? b.name : " / " + b.name;
     crumb.onclick = () => {
       breadcrumbs = breadcrumbs.slice(0, idx + 1);
-      const target = b.id || "root";
+      const target = b.id || null;
       openFolder(target, b.name);
     };
     bc.appendChild(crumb);
   });
 }
 
-// --- Render folders (only children of currentFolder) ---
-function renderFolders() {
-  folderList.innerHTML = "";
-  // folderSnapshot: { id: { name, parentId, fileCount, createdAt, ... } }
-  const items = [];
-  for (const id in foldersSnapshot) {
-    const f = foldersSnapshot[id];
-    const parentId = f.parentId || "root";
-    if (parentId === (currentFolder || "root")) {
-      items.push({ id, ...f });
-    }
-  }
-  // sort by localCreatedAt desc if present
-  items.sort((a, b) => (b.localCreatedAt || b.createdAt || 0) - (a.localCreatedAt || a.createdAt || 0));
-  items.forEach((f) => {
-    const div = el("div", "folder-card");
-    div.dataset.id = f.id;
-    div.innerHTML = `<span>📁 ${f.name}</span><small class="small-muted">${f.fileCount || 0} file</small>`;
-    // open folder on click
-    div.onclick = (e) => {
-      e.stopPropagation();
-      breadcrumbs.push({ id: f.id, name: f.name });
-      renderBreadcrumbs();
-      openFolder(f.id, f.name);
-    };
-    // drag target
-    div.ondragover = (e) => { e.preventDefault(); div.classList.add("drag-over"); };
-    div.ondragleave = () => div.classList.remove("drag-over");
-    div.ondrop = (e) => handleMoveFiles(e, f.id);
-    // context menu -> rename / delete
-    div.oncontextmenu = (e) => {
-      e.preventDefault();
-      const choice = prompt("Rename folder (kosong = batalkan):", f.name);
-      if (choice && choice.trim() !== f.name) {
-        update(rdbRef(rdb, `folders/${f.id}`), { name: choice.trim() })
-          .then(() => showToast("✏️ Nama folder diperbarui"))
-          .catch((err) => { console.warn(err); showToast("Gagal mengganti nama folder"); });
-      }
-    };
-    folderList.appendChild(div);
-  });
+// --- Folder realtime (children of currentFolder) ---
+// Use localCreatedAt to minimize flash of duplicates
+function loadFoldersRealtime() {
+  if (!currentUser) return;
+  // Query children where createdBy == currentUser.email && parentId == currentFolder
+  const q = query(
+    collection(db, "folders"),
+    where("createdBy", "==", currentUser.email),
+    where("parentId", "==", currentFolder || null),
+    orderBy("localCreatedAt", "desc")
+  );
+  if (folderUnsub) folderUnsub();
+  folderUnsub = safeOnSnapshot(
+    q,
+    (snap) => {
+      folderList.innerHTML = "";
+      snap.forEach((docu) => {
+        const f = docu.data();
+        const div = el("div", "folder-card");
+        div.dataset.id = docu.id;
+        div.innerHTML = `
+          <span>📁 ${f.name}</span>
+          <small class="small-muted">${f.fileCount || 0} file</small>
+        `;
+        div.onclick = (e) => {
+          e.stopPropagation();
+          breadcrumbs.push({ id: docu.id, name: f.name });
+          renderBreadcrumbs();
+          openFolder(docu.id, f.name);
+        };
+        // drag target for files
+        div.ondragover = (e) => {
+          e.preventDefault();
+          div.classList.add("drag-over");
+        };
+        div.ondragleave = () => div.classList.remove("drag-over");
+        div.ondrop = (e) => handleMoveFiles(e, docu.id);
+        // right-click: rename or delete folder
+        div.oncontextmenu = async (e) => {
+          e.preventDefault();
+          const choice = prompt("Rename folder (kosong = batalkan):", f.name);
+          if (choice && choice.trim() !== f.name) {
+            try {
+              await updateDoc(doc(db, "folders", docu.id), { name: choice.trim() });
+              showToast("✏️ Nama folder diperbarui");
+            } catch (err) {
+              console.error("Rename folder failed:", err);
+              showToast("Gagal mengganti nama folder");
+            }
+          }
+        };
+        folderList.appendChild(div);
+      });
+    },
+    "folders"
+  );
 }
 
-// --- Render files for currentFolder (and not deleted) ---
-function renderFiles() {
-  fileList.innerHTML = "";
-  ensureBulkControls();
-  const items = [];
-  for (const id in filesSnapshot) {
-    const fi = filesSnapshot[id];
-    if ((fi.folderId || "root") === (currentFolder || "root") && !fi.deleted) {
-      items.push({ id, ...fi });
-    }
-  }
-  // sort by createdAt desc
-  items.sort((a, b) => (b.createdAt || b.localCreatedAt || 0) - (a.createdAt || a.localCreatedAt || 0));
-
-  items.forEach((f) => {
-    const li = el("li", "file-row");
-    li.dataset.id = f.id;
-    li.draggable = true;
-    const created = f.createdAt ? new Date(f.createdAt).toLocaleString() : "baru";
-    li.innerHTML = `
-      <div class="file-info">
-        <input type="checkbox" class="file-checkbox" data-id="${f.id}" />
-        <div class="file-meta" style="margin-left:8px;">
-          <span class="file-name">${f.name}</span>
-          <span class="file-sub">${formatBytes(f.size || 0)} • ${created}</span>
-        </div>
-      </div>
-      <div class="file-actions">
-        <button class="btn" data-preview="${f.url || ''}">👁️</button>
-        <button class="btn danger" data-delete="${f.id}" data-path="${f.storagePath || ''}">🗑️</button>
-      </div>
-    `;
-    li.ondragstart = (e) => { e.dataTransfer.setData("text/plain", f.id); };
-    fileList.appendChild(li);
-  });
-  attachFileRowHandlers();
-}
-
-// --- Opening folder ---
-function openFolder(id, name) {
-  currentFolder = id || "root";
-  folderTitle.textContent = "📂 " + (name || "Root");
-  if (dropArea) dropArea.innerHTML = `<p>Tarik & lepas file di sini, atau klik Upload</p><small class="muted">Folder saat ini: ${name || "Root"}</small>`;
-  renderBreadcrumbs();
-  renderFolders();
-  renderFiles();
-}
-
-// --- Create folder (RTDB push) ---
+// --- Create folder (supports parentId) ---
 folderForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = folderInput.value.trim();
   if (!name || !currentUser) return;
   try {
-    const newRef = push(rdbRef(rdb, "folders"));
-    const payload = {
+    // add localCreatedAt to reduce flicker / duplication from serverTimestamp delay
+    await addDoc(collection(db, "folders"), {
       name,
-      parentId: currentFolder || "root",
-      fileCount: 0,
       createdBy: currentUser.email,
-      createdAt: Date.now(),
+      parentId: currentFolder || null,
+      createdAt: serverTimestamp(),
       localCreatedAt: Date.now(),
-      shared: true,
-    };
-    await set(newRef, payload);
+      fileCount: 0,
+    });
     folderInput.value = "";
-    showToast("📁 Folder dibuat (RTDB)");
+    showToast("📁 Folder dibuat");
   } catch (err) {
-    console.error("Create folder RTDB failed:", err);
+    console.error("Create folder failed:", err);
     showToast("Gagal membuat folder");
   }
 });
 
-// --- Upload files (to Storage) & create metadata in RTDB ---
-uploadBtn.onclick = () => fileInput.click();
-fileInput.onchange = (e) => handleFilesUpload(e.target.files);
+// --- Open folder: update state + reload children/files ---
+async function openFolder(id, name) {
+  currentFolder = id || null;
+  folderTitle.textContent = "📂 " + (name || "Root");
+  // update dropArea hint
+  if (dropArea) {
+    dropArea.innerHTML = `<p>Tarik & lepas file di sini, atau klik Upload</p><small class="muted">Folder saat ini: ${name || "Root"}</small>`;
+  }
+  renderBreadcrumbs();
+  // refresh listeners
+  loadFoldersRealtime();
+  loadFilesRealtime();
+}
 
-dropArea.ondragover = (e) => { e.preventDefault(); dropArea.classList.add("dragover"); };
-dropArea.ondragleave = () => dropArea.classList.remove("dragover");
-dropArea.ondrop = (e) => {
-  e.preventDefault();
-  dropArea.classList.remove("dragover");
-  handleFilesUpload(e.dataTransfer.files);
-};
+// --- Files realtime (per currentFolder) ---
+function loadFilesRealtime() {
+  if (!currentUser) return;
+  const q = query(
+    collection(db, "files"),
+    where("folderId", "==", currentFolder || null),
+    where("owner", "==", currentUser.email),
+    where("deleted", "==", false),
+    orderBy("createdAt", "desc")
+  );
+  if (fileUnsub) fileUnsub();
+  fileUnsub = safeOnSnapshot(
+    q,
+    (snap) => {
+      fileList.innerHTML = "";
+      ensureBulkControls();
+      snap.forEach((docu) => {
+        const f = docu.data();
+        const li = el("li", "file-row");
+        li.dataset.id = docu.id;
+        li.draggable = true;
+        const created = f.createdAt?.seconds
+          ? new Date(f.createdAt.seconds * 1000).toLocaleString()
+          : "baru";
+        li.innerHTML = `
+          <div class="file-info">
+            <input type="checkbox" class="file-checkbox" data-id="${docu.id}" />
+            <div class="file-meta" style="margin-left:8px;">
+              <span class="file-name">${f.name}</span>
+              <span class="file-sub">${formatBytes(f.size)} • ${created}</span>
+            </div>
+          </div>
+          <div class="file-actions">
+            <button class="btn" data-preview="${f.url}">👁️</button>
+            <button class="btn danger" data-delete="${docu.id}" data-path="${f.storagePath}">🗑️</button>
+          </div>
+        `;
+        li.ondragstart = (e) => {
+          e.dataTransfer.setData("text/plain", docu.id);
+        };
+        fileList.appendChild(li);
+      });
+      attachFileRowHandlers();
+    },
+    "files"
+  );
+}
 
+// --- File row handlers (preview, delete, checkboxes) ---
+function attachFileRowHandlers() {
+  // preview
+  fileList.querySelectorAll("button[data-preview]").forEach((btn) => {
+    btn.onclick = (e) => {
+      const url = btn.getAttribute("data-preview");
+      if (url) previewFile(url);
+    };
+  });
+  // delete (soft-delete -> move to recycle)
+  fileList.querySelectorAll("button[data-delete]").forEach((btn) => {
+    btn.onclick = async (e) => {
+      const id = btn.getAttribute("data-delete");
+      if (!id) return;
+      if (!confirm("Hapus file ini? File akan dipindahkan ke Recycle Bin.")) return;
+      try {
+        await updateDoc(doc(db, "files", id), {
+          deleted: true,
+          deletedAt: serverTimestamp(),
+        });
+        // decrement folder fileCount safely using transaction if folder exists
+        try {
+          const fd = await getDoc(doc(db, "files", id));
+          const fdata = fd.exists() ? fd.data() : null;
+          if (fdata?.folderId) {
+            const folderRef = doc(db, "folders", fdata.folderId);
+            await runTransaction(db, async (t) => {
+              const snap = await t.get(folderRef);
+              if (!snap.exists()) return;
+              const prev = snap.data().fileCount || 0;
+              t.update(folderRef, { fileCount: Math.max(0, prev - 1) });
+            });
+          }
+        } catch (txErr) {
+          console.warn("Adjust folder fileCount failed:", txErr);
+        }
+        showToast("🗑️ File dipindahkan ke Recycle Bin");
+      } catch (err) {
+        console.error("Soft-delete failed:", err);
+        showToast("Gagal memindahkan file ke Recycle Bin");
+      }
+    };
+  });
+  // checkboxes
+  fileList.querySelectorAll(".file-checkbox").forEach((cb) => {
+    cb.onchange = updateBulkSelectionUI;
+  });
+}
+
+// --- BULK UI & actions ---
+function ensureBulkControls() {
+  if (bulkControls) return;
+  bulkControls = el("div", "bulk-controls");
+  bulkControls.id = "bulk-controls";
+  bulkControls.innerHTML = `
+    <button id="bulk-download" class="btn">⬇️ Download selected</button>
+    <button id="bulk-delete" class="btn danger">🗑️ Delete selected</button>
+    <button id="clear-selection" class="btn">✖ Clear</button>
+  `;
+  document.body.appendChild(bulkControls);
+  bulkControls.querySelector("#clear-selection").onclick = () => {
+    fileList.querySelectorAll(".file-checkbox").forEach((cb) => (cb.checked = false));
+    updateBulkSelectionUI();
+  };
+  bulkControls.querySelector("#bulk-delete").onclick = bulkDeleteSelected;
+  bulkControls.querySelector("#bulk-download").onclick = bulkDownloadSelected;
+  updateBulkSelectionUI();
+}
+
+function updateBulkSelectionUI() {
+  const selected = Array.from(fileList.querySelectorAll(".file-checkbox:checked"));
+  if (!bulkControls) return;
+  bulkControls.style.display = selected.length > 0 ? "block" : "none";
+  bulkControls.querySelector("#bulk-download").textContent = `⬇️ Download (${selected.length})`;
+  bulkControls.querySelector("#bulk-delete").textContent = `🗑️ Delete (${selected.length})`;
+}
+
+async function bulkDeleteSelected() {
+  const selected = Array.from(fileList.querySelectorAll(".file-checkbox:checked")).map((c) => c.dataset.id);
+  if (selected.length === 0) return showToast("Pilih file dulu");
+  if (!confirm(`Hapus ${selected.length} file? File akan dipindahkan ke Recycle Bin.`)) return;
+  for (const id of selected) {
+    try {
+      await updateDoc(doc(db, "files", id), { deleted: true, deletedAt: serverTimestamp() });
+    } catch (err) {
+      console.error("Bulk soft-delete error:", err);
+    }
+  }
+  showToast("🗑️ Beberapa file dipindahkan ke Recycle Bin");
+}
+
+async function bulkDownloadSelected() {
+  const selected = Array.from(fileList.querySelectorAll(".file-checkbox:checked")).map((c) => c.dataset.id);
+  if (selected.length === 0) return showToast("Pilih file dulu");
+  showToast("Membuka file di tab baru untuk download...");
+  for (const id of selected) {
+    try {
+      const fd = await getDoc(doc(db, "files", id));
+      const data = fd.exists() ? fd.data() : null;
+      if (data?.url) window.open(data.url, "_blank");
+    } catch (err) {
+      console.warn("Open file failed:", err);
+    }
+  }
+}
+
+// --- Upload handling ---
 let globalProgressEl = null;
 function ensureGlobalProgress() {
   if (globalProgressEl) return;
@@ -368,6 +500,20 @@ function hideGlobalProgress() {
   globalProgressEl.style.display = "none";
 }
 
+uploadBtn.onclick = () => fileInput.click();
+fileInput.onchange = (e) => handleFilesUpload(e.target.files);
+
+dropArea.ondragover = (e) => {
+  e.preventDefault();
+  dropArea.classList.add("dragover");
+};
+dropArea.ondragleave = () => dropArea.classList.remove("dragover");
+dropArea.ondrop = (e) => {
+  e.preventDefault();
+  dropArea.classList.remove("dragover");
+  handleFilesUpload(e.dataTransfer.files);
+};
+
 function handleFilesUpload(files) {
   if (!currentUser) return showToast("Harap login dulu");
   const arr = [...files];
@@ -376,9 +522,10 @@ function handleFilesUpload(files) {
   let completed = 0;
   arr.forEach((file) => {
     const path = `${currentUser.uid}/${currentFolder || "root"}/${Date.now()}_${file.name}`;
-    const sRef = storageRef(storage, path);
-    const task = uploadBytesResumable(sRef, file);
-    task.on("state_changed",
+    const storageRef = ref(storage, path);
+    const task = uploadBytesResumable(storageRef, file);
+    task.on(
+      "state_changed",
       (snap) => {
         const percent = Math.round((snap.bytesTransferred / snap.totalBytes) * 100);
         showGlobalProgress(`⬆️ ${file.name} — ${percent}%`);
@@ -390,27 +537,29 @@ function handleFilesUpload(files) {
       async () => {
         try {
           const url = await getDownloadURL(task.snapshot.ref);
-          // push metadata to RTDB
-          const newFileRef = push(rdbRef(rdb, "files"));
-          const payload = {
+          const docRef = await addDoc(collection(db, "files"), {
             name: file.name,
             size: file.size,
-            folderId: currentFolder || "root",
+            folderId: currentFolder || null,
             owner: currentUser.email,
             storagePath: path,
             url,
-            createdAt: Date.now(),
+            createdAt: serverTimestamp(),
             localCreatedAt: Date.now(),
             deleted: false,
-          };
-          await set(newFileRef, payload);
-          // increment folder fileCount transactionally
-          if ((currentFolder || "root") !== "root") {
-            const countRef = rdbRef(rdb, `folders/${currentFolder}/fileCount`);
+          });
+          // increment folder fileCount safely
+          if (currentFolder) {
+            const folderRef = doc(db, "folders", currentFolder);
             try {
-              await runTransaction(countRef, (cur) => (cur || 0) + 1);
+              await runTransaction(db, async (t) => {
+                const fSnap = await t.get(folderRef);
+                if (!fSnap.exists()) return;
+                const prev = fSnap.data().fileCount || 0;
+                t.update(folderRef, { fileCount: prev + 1 });
+              });
             } catch (e) {
-              console.warn("increment folder count failed:", e);
+              console.warn("Folder fileCount increment failed:", e);
             }
           }
           completed++;
@@ -428,125 +577,53 @@ function handleFilesUpload(files) {
   });
 }
 
-// --- Attach file row handlers (preview, delete, checkboxes) ---
-function attachFileRowHandlers() {
-  // preview buttons
-  fileList.querySelectorAll("button[data-preview]").forEach((btn) => {
-    btn.onclick = (e) => {
-      const url = btn.getAttribute("data-preview");
-      if (url) previewFile(url);
-    };
-  });
-  // delete -> soft delete to recycle
-  fileList.querySelectorAll("button[data-delete]").forEach((btn) => {
-    btn.onclick = async (e) => {
-      const id = btn.getAttribute("data-delete");
-      if (!id) return;
-      if (!confirm("Hapus file ini? File akan dipindahkan ke Recycle Bin.")) return;
-      try {
-        // mark deleted
-        await update(rdbRef(rdb, `files/${id}`), { deleted: true, deletedAt: Date.now() });
-        // decrement folder count if needed
-        const fileMeta = filesSnapshot[id] || null;
-        if (fileMeta && fileMeta.folderId && fileMeta.folderId !== "root") {
-          const cntRef = rdbRef(rdb, `folders/${fileMeta.folderId}/fileCount`);
-          try {
-            await runTransaction(cntRef, (cur) => Math.max(0, (cur || 0) - 1));
-          } catch (e) { console.warn("decrement folder count failed:", e); }
-        }
-        showToast("🗑️ File dipindahkan ke Recycle Bin");
-      } catch (err) {
-        console.error("Soft-delete failed:", err);
-        showToast("Gagal memindahkan file ke Recycle Bin");
-      }
-    };
-  });
-  // checkboxes
-  fileList.querySelectorAll(".file-checkbox").forEach((cb) => { cb.onchange = updateBulkSelectionUI; });
-}
-
-// --- Bulk controls ---
-function ensureBulkControls() {
-  if (bulkControls) return;
-  bulkControls = el("div", "bulk-controls");
-  bulkControls.id = "bulk-controls";
-  bulkControls.innerHTML = `
-    <button id="bulk-download" class="btn">⬇️ Download selected</button>
-    <button id="bulk-delete" class="btn danger">🗑️ Delete selected</button>
-    <button id="clear-selection" class="btn">✖ Clear</button>
-  `;
-  document.body.appendChild(bulkControls);
-  bulkControls.querySelector("#clear-selection").onclick = () => {
-    fileList.querySelectorAll(".file-checkbox").forEach((cb) => (cb.checked = false));
-    updateBulkSelectionUI();
-  };
-  bulkControls.querySelector("#bulk-delete").onclick = bulkDeleteSelected;
-  bulkControls.querySelector("#bulk-download").onclick = bulkDownloadSelected;
-  updateBulkSelectionUI();
-}
-function updateBulkSelectionUI() {
-  const selected = Array.from(fileList.querySelectorAll(".file-checkbox:checked"));
-  if (!bulkControls) return;
-  bulkControls.style.display = selected.length > 0 ? "block" : "none";
-  bulkControls.querySelector("#bulk-download").textContent = `⬇️ Download (${selected.length})`;
-  bulkControls.querySelector("#bulk-delete").textContent = `🗑️ Delete (${selected.length})`;
-}
-async function bulkDeleteSelected() {
-  const selected = Array.from(fileList.querySelectorAll(".file-checkbox:checked")).map((c) => c.dataset.id);
-  if (selected.length === 0) return showToast("Pilih file dulu");
-  if (!confirm(`Hapus ${selected.length} file? File akan dipindahkan ke Recycle Bin.`)) return;
-  for (const id of selected) {
-    try {
-      await update(rdbRef(rdb, `files/${id}`), { deleted: true, deletedAt: Date.now() });
-      // update folder count if needed
-      const fileMeta = filesSnapshot[id] || null;
-      if (fileMeta && fileMeta.folderId && fileMeta.folderId !== "root") {
-        const cntRef = rdbRef(rdb, `folders/${fileMeta.folderId}/fileCount`);
-        try { await runTransaction(cntRef, (cur) => Math.max(0, (cur || 0) - 1)); } catch (e) {}
-      }
-    } catch (e) { console.warn("bulk soft-delete failed", e); }
-  }
-  showToast("🗑️ Bulk moved to Recycle");
-}
-async function bulkDownloadSelected() {
-  const selected = Array.from(fileList.querySelectorAll(".file-checkbox:checked")).map((c) => c.dataset.id);
-  if (selected.length === 0) return showToast("Pilih file dulu");
-  showToast("Membuka file di tab baru untuk download...");
-  for (const id of selected) {
-    try {
-      const meta = filesSnapshot[id];
-      if (meta && meta.url) window.open(meta.url, "_blank");
-    } catch (err) { console.warn("open file failed", err); }
-  }
-}
-
 // --- Move file by drag/drop into folder ---
 async function handleMoveFiles(e, targetFolderId) {
   e.preventDefault();
   const fileId = e.dataTransfer.getData("text/plain");
   if (!fileId) return;
   try {
-    const fmeta = filesSnapshot[fileId];
-    if (!fmeta) return;
-    const srcFolder = fmeta.folderId || "root";
-    if (srcFolder === targetFolderId) return showToast("File sudah di folder tersebut");
-    // update file's folderId
-    await update(rdbRef(rdb, `files/${fileId}`), { folderId: targetFolderId });
-    // adjust counts
-    if (srcFolder && srcFolder !== "root") {
-      await runTransaction(rdbRef(rdb, `folders/${srcFolder}/fileCount`), (cur) => Math.max(0, (cur || 0) - 1));
+    // fetch current file doc to adjust fileCount on source & target
+    const fd = await getDoc(doc(db, "files", fileId));
+    const fdata = fd.exists() ? fd.data() : null;
+    if (!fdata) return;
+    const srcFolder = fdata.folderId || null;
+    if (srcFolder === targetFolderId) {
+      showToast("File sudah berada di folder tersebut");
+      return;
     }
-    if (targetFolderId && targetFolderId !== "root") {
-      await runTransaction(rdbRef(rdb, `folders/${targetFolderId}/fileCount`), (cur) => (cur || 0) + 1);
+    await updateDoc(doc(db, "files", fileId), { folderId: targetFolderId });
+    // adjust counts (transactionally)
+    try {
+      if (srcFolder) {
+        const srcRef = doc(db, "folders", srcFolder);
+        await runTransaction(db, async (t) => {
+          const sSnap = await t.get(srcRef);
+          if (!sSnap.exists()) return;
+          const prev = sSnap.data().fileCount || 0;
+          t.update(srcRef, { fileCount: Math.max(0, prev - 1) });
+        });
+      }
+      if (targetFolderId) {
+        const tgtRef = doc(db, "folders", targetFolderId);
+        await runTransaction(db, async (t) => {
+          const tSnap = await t.get(tgtRef);
+          if (!tSnap.exists()) return;
+          const prev = tSnap.data().fileCount || 0;
+          t.update(tgtRef, { fileCount: prev + 1 });
+        });
+      }
+    } catch (e) {
+      console.warn("Adjust folder counts after move failed:", e);
     }
     showToast("📦 File dipindahkan");
   } catch (err) {
-    console.error("move failed:", err);
+    console.error("Move failed:", err);
     showToast("Gagal memindahkan file");
   }
 }
 
-// --- Preview modal ---
+// --- Preview ---
 window.previewFile = (url) => {
   const modal = document.getElementById("preview-modal");
   const body = document.getElementById("preview-body");
@@ -558,84 +635,7 @@ window.previewFile = (url) => {
 document.getElementById("close-preview").onclick = () =>
   document.getElementById("preview-modal").setAttribute("aria-hidden", "true");
 
-// --- Recycle bin view (show deleted files globally) ---
-function loadRecycleView() {
-  // Render filesSnapshot where deleted === true
-  fileList.innerHTML = "";
-  const items = [];
-  for (const id in filesSnapshot) {
-    const f = filesSnapshot[id];
-    if (f.deleted) items.push({ id, ...f });
-  }
-  items.sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
-  items.forEach((f) => {
-    const li = el("li", "file-row");
-    li.innerHTML = `
-      <div class="file-info">
-        🗑️ <span class="file-name">${f.name}</span>
-        <div class="file-sub">${formatBytes(f.size || 0)} • ${f.deletedAt ? new Date(f.deletedAt).toLocaleString() : "baru"}</div>
-      </div>
-      <div class="file-actions">
-        <button class="btn" data-restore="${f.id}">♻️ Restore</button>
-        <button class="btn danger" data-permadelete="${f.id}" data-path="${f.storagePath || ''}">❌ Hapus Permanen</button>
-      </div>
-    `;
-    fileList.appendChild(li);
-  });
-  // attach handlers
-  fileList.querySelectorAll("button[data-restore]").forEach((btn) => {
-    btn.onclick = async () => {
-      const id = btn.getAttribute("data-restore");
-      if (!id) return;
-      try {
-        // restore
-        await update(rdbRef(rdb, `files/${id}`), { deleted: false, deletedAt: null });
-        // increment folder count if folder exists
-        const meta = filesSnapshot[id];
-        if (meta && meta.folderId && meta.folderId !== "root") {
-          try { await runTransaction(rdbRef(rdb, `folders/${meta.folderId}/fileCount`), (cur) => (cur || 0) + 1); } catch (e) {}
-        }
-        showToast("♻️ Dipulihkan");
-      } catch (err) { console.error("restore failed", err); showToast("Gagal memulihkan"); }
-    };
-  });
-  fileList.querySelectorAll("button[data-permadelete]").forEach((btn) => {
-    btn.onclick = async () => {
-      const id = btn.getAttribute("data-permadelete");
-      const path = btn.getAttribute("data-path");
-      if (!id) return;
-      if (!confirm("Hapus permanen file ini? Tindakan ini tidak bisa dibatalkan.")) return;
-      try {
-        await remove(rdbRef(rdb, `files/${id}`));
-        if (path) await deleteObject(storageRef(storage, path)).catch((e) => console.warn("storage delete fail", e));
-        showToast("❌ File dihapus permanen");
-      } catch (err) { console.error("permadelete failed", err); showToast("Gagal hapus permanen"); }
-    };
-  });
-}
-
-// --- Tabs handling ---
-let activeTab = "files";
-tabFiles.onclick = () => { activeTab = "files"; setActiveTabUI(); };
-tabRecycle.onclick = () => { activeTab = "recycle"; setActiveTabUI(); };
-tabSettings.onclick = () => { activeTab = "settings"; setActiveTabUI(); };
-
-function setActiveTabUI() {
-  tabFiles.classList.toggle("active", activeTab === "files");
-  tabRecycle.classList.toggle("active", activeTab === "recycle");
-  tabSettings.classList.toggle("active", activeTab === "settings");
-  const content = document.querySelector(".content");
-  if (content) content.style.display = activeTab === "files" ? "flex" : "none";
-  settingsPanel.setAttribute("aria-hidden", activeTab === "settings" ? "false" : "true");
-  if (activeTab === "files") {
-    renderFolders();
-    renderFiles();
-  } else if (activeTab === "recycle") {
-    loadRecycleView();
-  }
-}
-
-// --- Search debounce (client side) ---
+// --- SEARCH (debounced on client-side) ---
 let searchTimer = null;
 globalSearch.addEventListener("input", () => {
   clearTimeout(searchTimer);
@@ -649,10 +649,18 @@ globalSearch.addEventListener("input", () => {
       const name = (li.querySelector(".file-name")?.textContent || "").toLowerCase();
       li.style.display = name.includes(term) ? "" : "none";
     });
-  }, 200);
+  }, 220);
 });
 
-// --- Theme handling (simple) ---
+// --- Keyboard shortcut: Ctrl/Cmd+K focus search ---
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    globalSearch.focus();
+  }
+});
+
+// --- Theme handling ---
 const themeBtn = document.getElementById("toggle-theme");
 themeBtn.onclick = () => {
   const cur = document.documentElement.dataset.theme;
@@ -677,17 +685,119 @@ settingsTheme?.addEventListener("change", (e) => {
   }
 });
 
-// --- Helpers: start listeners and render initial UI ---
-function start() {
-  breadcrumbs = [{ id: "root", name: "Root" }];
-  renderBreadcrumbs();
-  if (dropArea) dropArea.innerHTML = `<p>Tarik & lepas file di sini, atau klik Upload</p><small class="muted">Folder saat ini: Root</small>`;
-  showToast("Atlantis NAS RTDB siap");
-  setActiveTabUI();
+// --- Tabs: Files / Recycle / Settings ---
+function setActiveTabUI() {
+  // toggle active classes and visibility
+  tabFiles.classList.toggle("active", activeTab === "files");
+  tabRecycle.classList.toggle("active", activeTab === "recycle");
+  tabSettings.classList.toggle("active", activeTab === "settings");
+
+  // content area shown only for files tab
+  const content = document.querySelector(".content");
+  if (content) content.style.display = activeTab === "files" ? "flex" : "none";
+  // settings panel toggle
+  settingsPanel.setAttribute("aria-hidden", activeTab === "settings" ? "false" : "true");
+
+  // load appropriate data/listeners
+  if (activeTab === "files") {
+    loadFoldersRealtime();
+    loadFilesRealtime();
+  } else if (activeTab === "recycle") {
+    loadRecycleBin();
+  } else if (activeTab === "settings") {
+    // nothing special (settings panel already shows)
+  }
 }
-start();
+tabFiles.onclick = () => { activeTab = "files"; setActiveTabUI(); };
+tabRecycle.onclick = () => { activeTab = "recycle"; setActiveTabUI(); };
+tabSettings.onclick = () => { activeTab = "settings"; setActiveTabUI(); };
 
-// --- Clean public API exposure for preview (ke index.html) ---
-safeLog("Atlantis NAS RTDB edition loaded");
+// --- Recycle Bin: realtime view of deleted files ---
+function loadRecycleBin() {
+  if (!currentUser) return;
+  const q = query(
+    collection(db, "files"),
+    where("owner", "==", currentUser.email),
+    where("deleted", "==", true),
+    orderBy("deletedAt", "desc")
+  );
+  if (fileUnsub) fileUnsub();
+  fileUnsub = safeOnSnapshot(q, (snap) => {
+    fileList.innerHTML = "";
+    snap.forEach((docu) => {
+      const f = docu.data();
+      const li = el("li", "file-row");
+      li.innerHTML = `
+        <div class="file-info">
+          🗑️ <span class="file-name">${f.name}</span>
+          <div class="file-sub">${formatBytes(f.size)} • ${
+        f.deletedAt?.seconds ? new Date(f.deletedAt.seconds * 1000).toLocaleString() : "baru"
+      }</div>
+        </div>
+        <div class="file-actions">
+          <button class="btn" data-restore="${docu.id}">♻️ Restore</button>
+          <button class="btn danger" data-permadelete="${docu.id}" data-path="${f.storagePath}">❌ Hapus Permanen</button>
+        </div>
+      `;
+      fileList.appendChild(li);
+    });
+    // attach restore / permanent delete
+    fileList.querySelectorAll("button[data-restore]").forEach((btn) => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute("data-restore");
+        if (!id) return;
+        try {
+          await updateDoc(doc(db, "files", id), { deleted: false, deletedAt: null });
+          // optionally increment folder count if file had folderId
+          try {
+            const fd = await getDoc(doc(db, "files", id));
+            const data = fd.exists() ? fd.data() : null;
+            if (data?.folderId) {
+              const folderRef = doc(db, "folders", data.folderId);
+              await runTransaction(db, async (t) => {
+                const snap = await t.get(folderRef);
+                if (!snap.exists()) return;
+                const prev = snap.data().fileCount || 0;
+                t.update(folderRef, { fileCount: prev + 1 });
+              });
+            }
+          } catch (e) {
+            console.warn("Restore: increment folder failed", e);
+          }
+          showToast("♻️ Dipulihkan");
+        } catch (err) {
+          console.error("Restore failed:", err);
+          showToast("Gagal memulihkan file");
+        }
+      };
+    });
+    fileList.querySelectorAll("button[data-permadelete]").forEach((btn) => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute("data-permadelete");
+        const path = btn.getAttribute("data-path");
+        if (!id) return;
+        if (!confirm("Hapus permanen file ini? Tindakan ini tidak bisa dibatalkan.")) return;
+        try {
+          await deleteDoc(doc(db, "files", id));
+          if (path) {
+            await deleteObject(ref(storage, path)).catch((e) => console.warn("Storage delete:", e));
+          }
+          showToast("❌ File dihapus permanen");
+        } catch (err) {
+          console.error("Permanent delete failed:", err);
+          showToast("Gagal menghapus file permanen");
+        }
+      };
+    });
+  }, "recycle");
+}
 
-function safeLog(...a) { try { console.log(...a); } catch (e) {} }
+// --- Initial bootstrap & UI polish ---
+(function init() {
+  breadcrumbs = [{ id: null, name: "Root" }];
+  renderBreadcrumbs();
+  dropArea.innerHTML = `<p>Tarik & lepas file di sini, atau klik Upload</p><small class="muted">Folder saat ini: Root</small>`;
+  showToast("Atlantis NAS siap (updated)");
+})();
+
+safeLog("Atlantis NAS updated app.js loaded");
