@@ -3,122 +3,101 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Atlantis NAS — Admin</title>
-
-  <!-- Clean Cloud Styles -->
+  <title>Atlantis NAS — Clean Cloud Pro</title>
   <link rel="stylesheet" href="styles.css" />
 
-  <!-- Material Icons -->
-  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+  <!-- Material Icons + Font -->
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 
-  <!-- SweetAlert2 for modals & notifications -->
+  <!-- SweetAlert2 + Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-
-  <!-- Chart.js for storage usage -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
 </head>
 <body>
-  <div class="app">
+  <div class="layout">
     <aside class="sidebar">
       <div class="brand">
-        <div class="logo">🌥️</div>
-        <div>
+        <div class="logo">☁️</div>
+        <div class="brand-text">
           <h1>Atlantis NAS</h1>
-          <small>Admin Panel</small>
+          <p>Admin Panel</p>
         </div>
       </div>
 
-      <nav>
-        <button class="nav-btn active" data-view="folders"><span class="material-icons">folder</span> Folder</button>
-        <button class="nav-btn" data-view="files"><span class="material-icons">description</span> Files</button>
-        <button class="nav-btn" data-view="storage"><span class="material-icons">bar_chart</span> Storage</button>
-        <button class="nav-btn" data-view="activity"><span class="material-icons">history</span> Activity</button>
+      <nav class="nav">
+        <button class="nav-btn active" data-view="folders"><span class="material-icons-outlined">folder</span> Folder</button>
+        <button class="nav-btn" data-view="files"><span class="material-icons-outlined">description</span> Files</button>
+        <button class="nav-btn" data-view="storage"><span class="material-icons-outlined">bar_chart</span> Storage</button>
+        <button class="nav-btn" data-view="activity"><span class="material-icons-outlined">history</span> Activity</button>
       </nav>
 
-      <div class="sidebar-foot">
-        <small id="user-info">—</small>
-        <button id="logout-btn" class="ghost">Logout</button>
-      </div>
+      <footer class="sidebar-footer">
+        <p id="user-info">—</p>
+        <button id="logout-btn" class="logout-btn">
+          <span class="material-icons-outlined">logout</span> Logout
+        </button>
+      </footer>
     </aside>
 
     <main class="main">
-      <!-- Toolbar -->
       <header class="toolbar">
-        <div class="left">
+        <div class="toolbar-left">
           <div class="breadcrumb">Home / <span id="breadcrumb-current">Folders</span></div>
-          <div class="search-wrap">
+          <div class="search-group">
+            <span class="material-icons-outlined">search</span>
             <input id="search-box" placeholder="Cari folder atau file..." />
-            <button id="clear-search" title="Bersihkan"><span class="material-icons">close</span></button>
           </div>
         </div>
 
-        <div class="right">
-          <select id="sort-select" title="Urutkan">
+        <div class="toolbar-right">
+          <select id="sort-select">
             <option value="createdAt_desc">Terbaru</option>
             <option value="createdAt_asc">Terlama</option>
-            <option value="name_asc">Nama A → Z</option>
-            <option value="name_desc">Nama Z → A</option>
-            <option value="size_desc">Ukuran besar</option>
-            <option value="size_asc">Ukuran kecil</option>
+            <option value="name_asc">Nama A–Z</option>
+            <option value="name_desc">Nama Z–A</option>
           </select>
-
-          <button id="upload-btn" class="primary">+ Upload</button>
-          <label class="upload-area" id="drag-area" title="Drag & drop files di sini">
-            <input id="file-input" type="file" multiple hidden />
-            <span class="material-icons">file_upload</span>
-          </label>
+          <button id="upload-btn" class="btn-primary">
+            <span class="material-icons-outlined">upload_file</span> Upload
+          </button>
+          <input type="file" id="file-input" multiple hidden />
         </div>
       </header>
 
-      <!-- CONTENT VIEWS -->
-      <section id="view-folders" class="view view-active">
+      <section id="view-folders" class="view active">
         <div class="panel">
-          <div class="panel-head">
-            <h2>Folder</h2>
-            <form id="folder-form" class="inline-form">
+          <div class="panel-header">
+            <h2>📁 Folder</h2>
+            <form id="folder-form">
               <input id="folder-name" placeholder="Nama folder baru..." required />
-              <button type="submit" class="secondary">Buat</button>
+              <button type="submit" class="btn-secondary">Buat</button>
             </form>
           </div>
-
           <div id="folder-grid" class="grid"></div>
         </div>
       </section>
 
       <section id="view-files" class="view">
         <div class="panel">
-          <div class="panel-head">
-            <h2 id="folder-title">Pilih folder</h2>
-            <div class="bulk-controls">
-              <input type="checkbox" id="select-all" />
-              <label for="select-all">Pilih semua</label>
-              <button id="download-selected" class="secondary">Unduh</button>
-              <button id="delete-selected" class="danger">Hapus</button>
+          <div class="panel-header">
+            <h2 id="folder-title">🗂 Pilih Folder</h2>
+            <div class="bulk-actions">
+              <button id="download-selected" class="btn-secondary">Unduh</button>
+              <button id="delete-selected" class="btn-danger">Hapus</button>
             </div>
           </div>
-
           <div id="file-grid" class="grid"></div>
         </div>
       </section>
 
       <section id="view-storage" class="view">
         <div class="panel">
-          <div class="panel-head">
-            <h2>Storage</h2>
-            <div id="storage-summary">Menghitung...</div>
-          </div>
-
-          <div class="storage-area">
-            <canvas id="storage-chart" height="120"></canvas>
-            <div class="storage-bar-wrap">
-              <div class="storage-bar">
-                <div id="storage-used" class="storage-used" style="width:0%"></div>
-              </div>
-              <div class="storage-numbers">
-                <small id="storage-used-text">0 B</small>
-                <small id="storage-total-text">—</small>
-              </div>
+          <div class="panel-header"><h2>📊 Storage Usage</h2></div>
+          <div class="storage-container">
+            <canvas id="storage-chart"></canvas>
+            <div class="storage-info">
+              <div class="storage-bar"><div id="storage-used"></div></div>
+              <p id="storage-summary">Menghitung...</p>
             </div>
           </div>
         </div>
@@ -126,32 +105,25 @@
 
       <section id="view-activity" class="view">
         <div class="panel">
-          <div class="panel-head">
-            <h2>Activity Log</h2>
-            <small>Riwayat upload / delete / rename</small>
-          </div>
+          <div class="panel-header"><h2>📜 Activity Log</h2></div>
           <ul id="activity-list" class="activity-list"></ul>
         </div>
       </section>
 
-      <footer class="main-foot">
-        <small>© 2025 Atlantis Store — Clean Cloud</small>
+      <footer class="main-footer">
+        © 2025 Atlantis Store — Clean Cloud Pro
       </footer>
     </main>
   </div>
 
-  <!-- Preview Modal (hidden) -->
   <div id="preview-modal" class="modal">
-    <div class="modal-inner">
-      <button id="preview-close" class="modal-close material-icons">close</button>
-      <div id="preview-body" class="preview-body"></div>
-      <div id="preview-meta" class="preview-meta"></div>
+    <div class="modal-content">
+      <button id="preview-close" class="modal-close material-icons-outlined">close</button>
+      <div id="preview-body"></div>
+      <p id="preview-meta"></p>
     </div>
   </div>
 
-  <!-- Toast placeholder (SweetAlert2 used) -->
-
-  <!-- App script (module) -->
   <script type="module" src="app.js"></script>
 </body>
 </html>
