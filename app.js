@@ -1,19 +1,40 @@
+// app.js — Atlantis NAS v2.0 (complete)
+// Modules (Firebase JS SDK v11 style)
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
-import { 
-  getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged 
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
-import { 
-  getFirestore, collection, addDoc, doc, updateDoc, deleteDoc, getDocs, query, where, orderBy, onSnapshot, serverTimestamp 
+import {
+  getFirestore,
+  collection,
+  addDoc,
+  doc,
+  updateDoc,
+  deleteDoc,
+  getDocs,
+  query,
+  where,
+  orderBy,
+  serverTimestamp,
+  onSnapshot
 } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
-import { 
-  getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject 
+import {
+  getStorage,
+  ref as storageRef,
+  uploadBytesResumable,
+  getDownloadURL,
+  deleteObject
 } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-storage.js";
 
-// === firebase config (tetap) ===
+/* =======================
+   CONFIG — sesuaikan kalau perlu
+   ======================= */
 const firebaseConfig = {
   apiKey: "AIzaSyBdKELW2FNsL7H1zB8R765czcDPaSYybdg",
   authDomain: "atlantis-store.firebaseapp.com",
-  databaseURL: "https://atlantis-store-default-rtdb.firebaseio.com",
   projectId: "atlantis-store",
   storageBucket: "atlantis-store.appspot.com",
   messagingSenderId: "566295949160",
@@ -26,435 +47,631 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
-// DOM
+/* =======================
+   DOM Refs
+   ======================= */
+const loginSection = document.getElementById("login-section");
 const loginForm = document.getElementById("login-form");
 const loginEmail = document.getElementById("login-email");
 const loginPassword = document.getElementById("login-password");
 const loginError = document.getElementById("login-error");
 
-const loginSection = document.getElementById("login-section"); // keep legacy if present
-const appSection = document.getElementById("app-section"); // legacy
-const logoutBtn = document.getElementById("logout-btn");
+const appSection = document.getElementById("app-section");
 const userInfo = document.getElementById("user-info");
-const userInfoSmall = document.getElementById("user-info-small");
+const logoutBtn = document.getElementById("logout-btn");
 
 const folderForm = document.getElementById("folder-form");
 const folderNameInput = document.getElementById("folder-name");
-const folderListEl = document.getElementById("folder-list");
+const folderList = document.getElementById("folder-list");
+
+const foldersSection = document.getElementById("folders-section");
 const filesSection = document.getElementById("files-section");
-const fileList = document.getElementById("file-list");
+const folderTitle = document.getElementById("folder-title");
+
 const uploadBtn = document.getElementById("upload-btn");
 const fileInput = document.getElementById("file-input");
-const folderTitle = document.getElementById("folder-title");
 const dropArea = document.getElementById("drop-area");
+const fileList = document.getElementById("file-list");
+
 const previewModal = document.getElementById("preview-modal");
 const previewBody = document.getElementById("preview-body");
 const closePreview = document.getElementById("close-preview");
 const previewDownload = document.getElementById("preview-download");
-const copyLinkBtn = document.getElementById("copy-link");
+
+const toastEl = document.getElementById("toast");
+
 const globalSearch = document.getElementById("global-search");
 const sortSelect = document.getElementById("sort-select");
-const bulkDeleteBtn = document.getElementById("bulk-delete");
-const selectAllBtn = document.getElementById("select-all");
-const fileCountEl = document.getElementById("file-count");
-const uploadStatus = document.getElementById("upload-status");
+const tabFiles = document.getElementById("tab-files");
+const tabRecycle = document.getElementById("tab-recycle");
+const tabSettings = document.getElementById("tab-settings");
 const toggleThemeBtn = document.getElementById("toggle-theme");
-const btnRecycle = document.getElementById("btn-recycle");
-const btnFolders = document.getElementById("btn-folders");
 
+/* =======================
+   App State
+   ======================= */
 let currentUser = null;
-let currentFolder = null;
+let currentFolderId = null;
 let currentFolderName = '';
-let filesCache = []; // client cache for search/sort
+let filesCache = []; // local snapshot of current folder files (not deleted)
 let selectedFiles = new Set();
+let uploadTasks = new Map(); // track upload tasks for cancel/resume UI
 
-// ===== AUTH =====
-loginForm?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  loginError.textContent = "";
-  try {
-    const userCred = await signInWithEmailAndPassword(auth, loginEmail.value, loginPassword.value);
-    console.log("Login success:", userCred.user.email);
-  } catch (err) {
-    loginError.textContent = "Login gagal: " + err.message;
-  }
-});
-
-logoutBtn?.addEventListener("click", async () => {
-  await signOut(auth);
-});
-
-onAuthStateChanged(auth, (user) => {
-  if (user && user.email === "admin@atlantis.com") {
-    currentUser = user;
-    // show UI
-    document.querySelector(".container").style.display = "flex";
-    userInfo.textContent = `Login sebagai: ${user.email}`;
-    userInfoSmall.textContent = user.email;
-    loadFolders();
-  } else {
-    currentUser = null;
-    // if login section exists, show else hide container
-    if (document.getElementById("login-section")) {
-      document.getElementById("login-section").style.display = "block";
-    }
-    document.querySelector(".container").style.display = "none";
-  }
-});
-
-// ===== FOLDERS =====
-function loadFolders(){
-  const q = query(collection(db, "folders"), orderBy("createdAt", "desc"));
-  onSnapshot(q, snapshot => {
-    folderListEl.innerHTML = "";
-    snapshot.forEach(docSnap => {
-      const f = docSnap.data();
-      const id = docSnap.id;
-      const card = document.createElement("div");
-      card.className = "folder-card";
-      card.innerHTML = `
-        <div>
-          <div class="name">${escapeHtml(f.name)}</div>
-          <div class="meta">oleh ${f.createdBy || '-'} • ${f.createdAt ? new Date(f.createdAt.seconds*1000).toLocaleString() : ''}</div>
-        </div>
-        <div class="actions">
-          <button data-id="${id}" class="rename">✏️</button>
-          <button data-id="${id}" class="delete">🗑️</button>
-        </div>
-      `;
-      card.addEventListener("click", (ev) => {
-        // avoid when clicking action buttons
-        if(ev.target.tagName.toLowerCase() === 'button') return;
-        selectFolder(id, f.name);
-      });
-      card.querySelector(".rename").addEventListener("click", (e) => {
-        e.stopPropagation();
-        renameFolder(id, f.name);
-      });
-      card.querySelector(".delete").addEventListener("click", (e) => {
-        e.stopPropagation();
-        deleteFolder(id);
-      });
-      folderListEl.appendChild(card);
-    });
-  });
+/* =======================
+   Utilities
+   ======================= */
+function toast(message, timeout = 3000) {
+  if (!toastEl) return alert(message);
+  toastEl.textContent = message;
+  toastEl.style.display = "block";
+  setTimeout(() => {
+    toastEl.style.display = "none";
+  }, timeout);
 }
 
-folderForm?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const name = folderNameInput.value.trim();
-  if (!name) return;
-  await addDoc(collection(db, "folders"), {
-    name,
-    createdAt: serverTimestamp(),
-    createdBy: currentUser.email
-  });
-  folderNameInput.value = "";
-  logAudit('create_folder', { name });
-});
-
-// ===== SELECT FOLDER & LOAD FILES =====
-async function selectFolder(folderId, name){
-  currentFolder = folderId;
-  currentFolderName = name;
-  folderTitle.textContent = "📁 " + name;
-  uploadBtn.disabled = false;
-  fileList.innerHTML = '';
-  loadFiles(folderId);
-  document.getElementById('breadcrumb').textContent = `Folder / ${name}`;
-}
-
-function loadFiles(folderId){
-  const q = query(collection(db, "files"), where("folderId","==", folderId), orderBy("createdAt","desc"));
-  onSnapshot(q, snapshot => {
-    filesCache = [];
-    fileList.innerHTML = "";
-    snapshot.forEach(docSnap => {
-      const f = docSnap.data();
-      if(f.deleted) return; // soft-delete filtered out
-      const item = {
-        id: docSnap.id,
-        ...f
-      };
-      filesCache.push(item);
-    });
-    renderFiles();
-  });
-}
-
-function renderFiles(){
-  // apply search + sort
-  let results = [...filesCache];
-  const q = globalSearch.value?.toLowerCase()?.trim();
-  if(q){
-    results = results.filter(f => (f.name||'').toLowerCase().includes(q));
-  }
-  const sortBy = sortSelect.value;
-  if(sortBy === 'name') results.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
-  if(sortBy === 'size') results.sort((a,b)=> (b.size||0)-(a.size||0));
-  if(sortBy === 'createdAt') results.sort((a,b)=> (b.createdAt?.seconds||0)-(a.createdAt?.seconds||0) ? (b.createdAt.seconds - a.createdAt.seconds) : 0);
-
-  fileList.innerHTML = '';
-  results.forEach(f => {
-    const li = document.createElement('li');
-    li.dataset.id = f.id;
-    li.innerHTML = `
-      <input type="checkbox" class="file-checkbox" data-id="${f.id}" />
-      <div class="file-meta">
-        <div class="file-name">${escapeHtml(f.name)}</div>
-        <div class="file-sub">${(f.size ? formatBytes(f.size) : '')} • ${f.contentType || ''}</div>
-      </div>
-      <div class="file-actions">
-        <button class="preview" data-id="${f.id}">👁️</button>
-        <a class="download" href="${f.downloadURL}" target="_blank" rel="noreferrer">⬇️</a>
-        <button class="rename" data-id="${f.id}" data-name="${escapeHtml(f.name)}">✏️</button>
-        <button class="delete" data-id="${f.id}" data-path="${f.storagePath}">🗑️</button>
-      </div>
-    `;
-    // checkbox
-    li.querySelector('.file-checkbox').addEventListener('change', (e)=>{
-      const id = e.target.dataset.id;
-      if(e.target.checked) selectedFiles.add(id); else selectedFiles.delete(id);
-      toggleBulk();
-    });
-    li.querySelector('.preview').addEventListener('click', ()=> previewFile(f));
-    li.querySelector('.rename').addEventListener('click', ()=> renameFile(f.id, f.name));
-    li.querySelector('.delete').addEventListener('click', ()=> softDeleteFile(f.id, f.storagePath));
-    fileList.appendChild(li);
-  });
-  fileCountEl.textContent = `${results.length} file`;
-}
-
-function toggleBulk(){
-  bulkDeleteBtn.disabled = selectedFiles.size === 0;
-}
-
-selectAllBtn?.addEventListener('click', ()=>{
-  const checkboxes = document.querySelectorAll('.file-checkbox');
-  const all = Array.from(checkboxes);
-  const allChecked = all.every(cb=>cb.checked);
-  all.forEach(cb=>{
-    cb.checked = !allChecked;
-    const id = cb.dataset.id;
-    if(cb.checked) selectedFiles.add(id); else selectedFiles.delete(id);
-  });
-  toggleBulk();
-});
-
-bulkDeleteBtn?.addEventListener('click', async ()=>{
-  if(!confirm("Hapus file terpilih? (akan masuk Recycle Bin)")) return;
-  for(const id of selectedFiles){
-    await softDeleteFile(id);
-  }
-  selectedFiles.clear();
-  toggleBulk();
-});
-
-// ===== UPLOAD (drag & drop + progress) =====
-uploadBtn?.addEventListener('click', ()=> fileInput.click());
-
-fileInput?.addEventListener('change', handleFiles);
-['dragenter','dragover','dragleave','drop'].forEach(evt=>{
-  dropArea.addEventListener(evt, (e)=> e.preventDefault());
-});
-dropArea.addEventListener('dragover', ()=> dropArea.classList.add('dragover'));
-dropArea.addEventListener('dragleave', ()=> dropArea.classList.remove('dragover'));
-dropArea.addEventListener('drop', (e)=>{
-  dropArea.classList.remove('dragover');
-  const files = e.dataTransfer.files;
-  handleFiles({ target:{ files }});
-});
-
-async function handleFiles(e){
-  const files = e.target.files;
-  if(!files || !currentFolder) return alert('Pilih folder terlebih dahulu');
-  for(const file of files){
-    if(file.size > 1024*1024*500){ // example: 500MB limit client check
-      alert(`${file.name} melebihi batas ukuran 500MB`);
-      continue;
-    }
-    const path = `uploads/${currentFolder}/${Date.now()}-${file.name}`;
-    const ref = storageRef(storage, path);
-    const uploadTask = uploadBytesResumable(ref, file);
-    // create progress UI element
-    const statusEl = document.createElement('div');
-    statusEl.textContent = `Uploading ${file.name}`;
-    uploadStatus.appendChild(statusEl);
-    uploadTask.on('state_changed', (snapshot)=>{
-      const pct = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-      statusEl.textContent = `Uploading ${file.name} — ${pct}%`;
-    }, (err)=>{
-      console.error(err);
-      statusEl.textContent = `Upload error ${file.name}`;
-    }, async ()=>{
-      const url = await getDownloadURL(ref);
-      await addDoc(collection(db, "files"), {
-        name: file.name,
-        folderId: currentFolder,
-        storagePath: path,
-        downloadURL: url,
-        size: file.size,
-        contentType: file.type,
-        createdAt: serverTimestamp(),
-        createdBy: currentUser.email
-      });
-      statusEl.textContent = `Uploaded ${file.name} ✓`;
-      setTimeout(()=> statusEl.remove(), 2500);
-      logAudit('upload_file', { name: file.name, folder: currentFolderName });
-    });
-  }
-}
-
-// ===== PREVIEW =====
-function previewFile(fileObj){
-  previewBody.innerHTML = '';
-  previewDownload.href = fileObj.downloadURL;
-  previewDownload.setAttribute('download', fileObj.name || 'file');
-  if(fileObj.contentType && fileObj.contentType.startsWith('image')){
-    const img = document.createElement('img');
-    img.src = fileObj.downloadURL;
-    img.style.maxWidth = '100%';
-    previewBody.appendChild(img);
-  } else if(fileObj.contentType && fileObj.contentType === 'application/pdf'){
-    const iframe = document.createElement('iframe');
-    iframe.src = fileObj.downloadURL;
-    iframe.style.width = '100%'; iframe.style.height='70vh';
-    previewBody.appendChild(iframe);
-  } else {
-    previewBody.innerHTML = `<p>Tidak dapat preview. Gunakan Download.</p>`;
-  }
-  previewModal.setAttribute('aria-hidden','false');
-}
-
-closePreview.addEventListener('click', ()=> previewModal.setAttribute('aria-hidden','true'));
-copyLinkBtn.addEventListener('click', async ()=>{
-  const url = previewDownload.href;
-  await navigator.clipboard.writeText(url);
-  alert('Link disalin ke clipboard');
-});
-
-// ===== RENAME, DELETE (soft) =====
-window.renameFile = async (id, oldName) => {
-  const newName = prompt("Ubah nama file:", oldName);
-  if (!newName) return;
-  await updateDoc(doc(db, "files", id), { name: newName });
-  logAudit('rename_file', { id, oldName, newName });
-};
-
-async function softDeleteFile(id, path=null){
-  // soft-delete by set deleted:true
-  await updateDoc(doc(db, "files", id), { deleted: true, deletedAt: serverTimestamp(), deletedBy: currentUser.email });
-  logAudit('soft_delete_file', { id, path });
-  alert('File dipindahkan ke Recycle Bin');
-}
-
-// rename folder
-window.renameFolder = async (id, oldName) => {
-  const newName = prompt("Ubah nama folder:", oldName);
-  if (!newName) return;
-  await updateDoc(doc(db, "folders", id), { name: newName });
-  logAudit('rename_folder', { id, oldName, newName });
-};
-
-// delete folder + files permanently (use with care)
-window.deleteFolder = async (id) => {
-  if (!confirm("Hapus folder dan semua file di dalamnya PERMANENT?")) return;
-  const q = query(collection(db, "files"), where("folderId", "==", id));
-  const snap = await getDocs(q);
-  for (const docSnap of snap.docs) {
-    const f = docSnap.data();
-    try{ await deleteObject(storageRef(storage, f.storagePath)); }catch(e){console.warn(e)}
-    await deleteDoc(doc(db, "files", docSnap.id));
-  }
-  await deleteDoc(doc(db, "folders", id));
-  logAudit('delete_folder', { id });
-};
-
-// ===== RECYCLE BIN (simple view) =====
-btnRecycle?.addEventListener('click', async ()=>{
-  // show deleted files across folders
-  const q = query(collection(db, "files"), where("deleted","==",true), orderBy("deletedAt","desc"));
-  const snap = await getDocs(q);
-  const items = [];
-  snap.forEach(s => items.push({ id: s.id, ...s.data() }));
-  fileList.innerHTML = '';
-  items.forEach(f=>{
-    const li = document.createElement('li');
-    li.innerHTML = `
-      <div class="file-meta">
-        <div class="file-name">${escapeHtml(f.name)}</div>
-        <div class="file-sub">dihapus: ${f.deletedAt ? new Date(f.deletedAt.seconds*1000).toLocaleString() : ''}</div>
-      </div>
-      <div class="file-actions">
-        <button class="restore" data-id="${f.id}">↩️ Restore</button>
-        <button class="perma" data-id="${f.id}" data-path="${f.storagePath}">🗑️ Hapus Permanen</button>
-      </div>
-    `;
-    li.querySelector('.restore').addEventListener('click', ()=> restoreFile(f.id));
-    li.querySelector('.perma').addEventListener('click', ()=> permaDeleteFile(f.id, f.storagePath));
-    fileList.appendChild(li);
-  });
-});
-
-async function restoreFile(id){
-  await updateDoc(doc(db, "files", id), { deleted: false, deletedAt: null, deletedBy: null });
-  logAudit('restore_file', { id });
-  alert('File dikembalikan');
-}
-
-async function permaDeleteFile(id, path){
-  if(!confirm('Hapus permanen?')) return;
-  try{ await deleteObject(storageRef(storage, path)); }catch(e){console.warn(e)}
-  await deleteDoc(doc(db, "files", id));
-  logAudit('perma_delete', { id });
-  alert('File dihapus permanen');
-}
-
-// ===== SEARCH + SORT hooks =====
-globalSearch?.addEventListener('input', ()=> renderFiles());
-sortSelect?.addEventListener('change', ()=> renderFiles());
-
-// ===== UTILS =====
-function formatBytes(bytes, decimals = 2) {
-  if(bytes === 0) return '0 B';
-  const k = 1024, dm = decimals < 0 ? 0 : decimals;
+function formatBytes(bytes = 0, decimals = 2) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
   const sizes = ['B','KB','MB','GB','TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 function escapeHtml(s = '') {
-  return s.replace(/[&<>"'`=\/]/g, function (c) { return {'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;','`':'&#96;','/':'&#47;'}[c]; });
+  return s.replace(/[&<>"'`=\/]/g, function (c) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c];
+  });
+}
+function el(tag, attrs = {}, ...children) {
+  const e = document.createElement(tag);
+  for (const k in attrs) {
+    if (k === 'class') e.className = attrs[k];
+    else if (k.startsWith('data-')) e.setAttribute(k, attrs[k]);
+    else if (k === 'html') e.innerHTML = attrs[k];
+    else e[k] = attrs[k];
+  }
+  children.flat().forEach(c => {
+    if (typeof c === 'string') e.appendChild(document.createTextNode(c));
+    else if (c instanceof Node) e.appendChild(c);
+  });
+  return e;
 }
 
-// ===== Audit log helper =====
-async function logAudit(action, meta = {}){
-  try{
+/* =======================
+   File Icon mapping by MIME/type
+   ======================= */
+function fileIconFor(file) {
+  const mime = (file.contentType || file.type || '').toLowerCase();
+  const name = (file.name || '').toLowerCase();
+  if (mime.startsWith('image/')) return '🖼️';
+  if (mime === 'application/pdf' || name.endsWith('.pdf')) return '📄';
+  if (mime.startsWith('video/')) return '🎞️';
+  if (mime.includes('zip') || name.endsWith('.zip') || name.endsWith('.rar')) return '🗜️';
+  if (mime.includes('excel') || name.endsWith('.xls') || name.endsWith('.xlsx')) return '📊';
+  if (mime.includes('word') || name.endsWith('.doc') || name.endsWith('.docx')) return '📃';
+  if (mime.includes('presentation') || name.endsWith('.ppt') || name.endsWith('.pptx')) return '📽️';
+  if (mime.startsWith('text/') || name.endsWith('.txt') || name.endsWith('.md')) return '📝';
+  return '📁';
+}
+
+/* =======================
+   THEME: auto detect + toggle
+   ======================= */
+function initTheme() {
+  const saved = localStorage.getItem('theme');
+  if (saved) {
+    if (saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+  } else {
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    if (prefersDark) document.documentElement.setAttribute('data-theme', 'dark');
+  }
+}
+toggleThemeBtn?.addEventListener('click', () => {
+  const cur = document.documentElement.getAttribute('data-theme');
+  if (cur === 'dark') {
+    document.documentElement.removeAttribute('data-theme');
+    localStorage.setItem('theme', 'light');
+  } else {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    localStorage.setItem('theme', 'dark');
+  }
+});
+initTheme();
+
+/* =======================
+   AUTH: sign in/out + domain check
+   ======================= */
+loginForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  loginError.textContent = '';
+  const email = loginEmail.value.trim();
+  const password = loginPassword.value;
+  try {
+    const cred = await signInWithEmailAndPassword(auth, email, password);
+    // onAuthStateChanged handles UI
+  } catch (err) {
+    console.error('Login error:', err);
+    loginError.textContent = "Login gagal: " + (err.message || err.code || 'unknown');
+  }
+});
+
+logoutBtn?.addEventListener('click', async () => {
+  await signOut(auth);
+  toast('Logged out');
+});
+
+onAuthStateChanged(auth, async (user) => {
+  if (user && typeof user.email === 'string' && user.email.toLowerCase().endsWith('@atlantis.com')) {
+    currentUser = user;
+    // show main app
+    loginSection.style.display = 'none';
+    appSection.style.display = 'flex';
+    userInfo.textContent = `${user.email}`;
+    await loadFoldersRealtime(); // start listening folders
+    // default: show folders
+    showTab('files');
+    toast(`Selamat datang, ${user.email}`);
+  } else {
+    // not logged in or not allowed domain
+    currentUser = null;
+    appSection.style.display = 'none';
+    loginSection.style.display = 'flex';
+    if (user && !user.email.toLowerCase().endsWith('@atlantis.com')) {
+      // quick sign out for other domains
+      await signOut(auth);
+      loginError.textContent = 'Hanya akun @atlantis.com yang diperbolehkan.';
+    }
+  }
+});
+
+/* =======================
+   FOLDERS: load + create + ui
+   ======================= */
+let foldersUnsub = null;
+async function loadFoldersRealtime() {
+  // unsubscribe old
+  if (foldersUnsub) { foldersUnsub(); foldersUnsub = null; }
+  const q = query(collection(db, 'folders'), orderBy('createdAt','desc'));
+  foldersUnsub = onSnapshot(q, snapshot => {
+    folderList.innerHTML = '';
+    snapshot.forEach(docSnap => {
+      const f = docSnap.data();
+      const id = docSnap.id;
+      const card = el('div', { class: 'folder-card', 'data-id': id },
+        el('div', { class: 'folder-title' }, `${fileIconFor({name:f.name})} ${escapeHtml(f.name)}`),
+        el('div', { class: 'folder-meta' }, f.createdBy || '', ' ', f.createdAt ? '' : '')
+      );
+      card.addEventListener('click', (ev) => {
+        // open folder
+        selectFolder(id, f.name);
+      });
+      folderList.appendChild(card);
+    });
+  }, (err) => {
+    console.error('Folder listen error', err);
+  });
+}
+
+folderForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = folderNameInput.value.trim();
+  if (!name) return;
+  try {
+    await addDoc(collection(db, 'folders'), { name, createdAt: serverTimestamp(), createdBy: currentUser.email });
+    folderNameInput.value = '';
+    toast('Folder dibuat');
+    logAudit('create_folder', { name });
+  } catch (err) {
+    console.error(err);
+    toast('Gagal membuat folder');
+  }
+});
+
+/* =======================
+   SELECT FOLDER & FILES realtime
+   ======================= */
+let filesUnsub = null;
+function selectFolder(folderId, name) {
+  currentFolderId = folderId;
+  currentFolderName = name;
+  folderTitle.textContent = `📁 ${name}`;
+  uploadBtn.disabled = false;
+  filesSection.classList.remove('hidden');
+  // load files realtime
+  if (filesUnsub) filesUnsub();
+  const q = query(collection(db, 'files'), where('folderId','==',folderId), orderBy('createdAt','desc'));
+  filesUnsub = onSnapshot(q, snapshot => {
+    filesCache = [];
+    snapshot.forEach(docSnap => {
+      const data = docSnap.data();
+      const id = docSnap.id;
+      filesCache.push({ id, ...data });
+    });
+    renderFileList();
+  });
+}
+
+/* =======================
+   RENDER FILE LIST: search, sort, animations
+   ======================= */
+function renderFileList() {
+  // filter deleted out automatically (recycle bin is separate)
+  let results = filesCache.filter(f => !f.deleted);
+  const q = (globalSearch.value || '').trim().toLowerCase();
+  if (q) {
+    results = results.filter(f => (f.name || '').toLowerCase().includes(q));
+  }
+  const sortBy = sortSelect?.value || 'createdAt';
+  if (sortBy === 'name') results.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
+  if (sortBy === 'size') results.sort((a,b)=> (b.size||0) - (a.size||0));
+  if (sortBy === 'createdAt') results.sort((a,b)=> (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0) ? (b.createdAt.seconds - a.createdAt.seconds) : 0);
+
+  // clear UI
+  fileList.innerHTML = '';
+
+  // create each file row
+  results.forEach(f => {
+    const row = el('li', { class: 'file-row', 'data-id': f.id },
+      el('div', { class: 'file-info' },
+        el('input', { type: 'checkbox', class: 'file-checkbox', onchange: () => toggleSelectFile(f.id) }),
+        el('div', { class: 'file-icon' }, fileIconFor(f)),
+        el('div', { class: 'file-meta' },
+          el('div', { class: 'file-name' }, escapeHtml(f.name || '—')),
+          el('div', { class: 'file-sub' }, `${formatBytes(f.size||0)} • ${f.contentType || ''}`)
+        )
+      ),
+      el('div', { class: 'file-actions' },
+        el('button', { class: 'btn-action preview-btn', title: 'Preview' }, '👁️'),
+        el('a', { class: 'btn-action dl', href: f.downloadURL || '#', target: '_blank', rel: 'noreferrer', title: 'Download' }, '⬇️'),
+        el('button', { class: 'btn-action rename-btn', title: 'Rename' }, '✏️'),
+        el('button', { class: 'btn-action delete-btn', title: 'Delete' }, '🗑️')
+      )
+    );
+
+    // attach handlers
+    row.querySelector('.preview-btn').addEventListener('click', () => previewFile(f));
+    row.querySelector('.rename-btn').addEventListener('click', () => renameFilePrompt(f));
+    row.querySelector('.delete-btn').addEventListener('click', () => softDeleteFile(f.id));
+    // checkbox state maintained by selectedFiles
+    const cb = row.querySelector('.file-checkbox');
+    if (selectedFiles.has(f.id)) cb.checked = true;
+    fileList.appendChild(row);
+  });
+
+  // Update small counts, toolbar, etc.
+  updateFloatingToolbar();
+}
+
+/* =======================
+   Selection helpers + floating toolbar
+   ======================= */
+function toggleSelectFile(id) {
+  if (selectedFiles.has(id)) selectedFiles.delete(id); else selectedFiles.add(id);
+  updateFloatingToolbar();
+}
+function clearSelection() {
+  selectedFiles.clear();
+  // uncheck checkboxes in DOM
+  document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = false);
+  updateFloatingToolbar();
+}
+function updateFloatingToolbar() {
+  // floating toolbar appears when selection > 0
+  const selectedCount = selectedFiles.size;
+  // if you want a floating toolbar, create/insert it here; for simplicity we show toast + enable bulk buttons
+  const bulkControlsExists = document.getElementById('bulk-controls');
+  let bulkControls = bulkControlsExists;
+  if (!bulkControls && selectedCount > 0) {
+    bulkControls = el('div', { id: 'bulk-controls', class: 'bulk-controls' },
+      el('span', {}, `${selectedCount} terpilih`),
+      el('button', { id: 'bulk-download' }, '⬇️ Download'),
+      el('button', { id: 'bulk-delete' }, '🗑️ Hapus'),
+      el('button', { id: 'bulk-clear' }, '✖ Clear')
+    );
+    document.body.appendChild(bulkControls);
+    document.getElementById('bulk-clear').addEventListener('click', () => {
+      clearSelection();
+      bulkControls.remove();
+    });
+    document.getElementById('bulk-delete').addEventListener('click', async () => {
+      if (!confirm('Hapus file terpilih? (akan masuk Recycle Bin)')) return;
+      for (const id of Array.from(selectedFiles)) {
+        await softDeleteFile(id);
+      }
+      clearSelection();
+      bulkControls.remove();
+      toast('File dipindahkan ke Recycle Bin');
+    });
+    document.getElementById('bulk-download').addEventListener('click', () => {
+      toast('Untuk download banyak file, gunakan fitur Zip server-side (Cloud Function).');
+    });
+  } else if (bulkControls && selectedCount === 0) {
+    bulkControls.remove();
+  } else if (bulkControls) {
+    bulkControls.querySelector('span').textContent = `${selectedCount} terpilih`;
+  }
+}
+
+/* =======================
+   UPLOAD: drag/drop + per-file progress
+   ======================= */
+uploadBtn?.addEventListener('click', () => fileInput?.click());
+
+fileInput?.addEventListener('change', (e) => {
+  const files = e.target.files;
+  if (!files || files.length === 0) return;
+  handleUploadFiles(files);
+});
+
+// drag/drop
+['dragenter','dragover'].forEach(ev => {
+  dropArea?.addEventListener(ev, (e) => {
+    e.preventDefault();
+    dropArea.classList.add('dragover');
+  });
+});
+['dragleave','drop'].forEach(ev => {
+  dropArea?.addEventListener(ev, (e) => {
+    e.preventDefault();
+    dropArea.classList.remove('dragover');
+  });
+});
+dropArea?.addEventListener('drop', (e) => {
+  const dt = e.dataTransfer;
+  if (!dt) return;
+  const files = dt.files;
+  if (!files || files.length === 0) return;
+  handleUploadFiles(files);
+});
+
+async function handleUploadFiles(fileListObj) {
+  if (!currentFolderId) { toast('Pilih folder tujuan terlebih dahulu'); return; }
+  for (const file of Array.from(fileListObj)) {
+    // client side checks
+    if (file.size > 1024 * 1024 * 1024) { // 1GB example limit
+      toast(`${file.name} terlalu besar (>1GB)`);
+      continue;
+    }
+    // create UI row for uploading
+    const uploadingRow = el('div', { class: 'upload-row' },
+      el('div', {}, `Uploading ${escapeHtml(file.name)} `),
+      el('div', { class: 'progress-bar' },
+        el('div', { class: 'progress-fill', style: 'width:0%' })
+      ),
+      el('button', { class: 'cancel-upload' }, 'Cancel')
+    );
+    document.body.appendChild(uploadingRow);
+
+    // storage path
+    const path = `uploads/${currentFolderId}/${Date.now()}-${file.name}`;
+    const sRef = storageRef(storage, path);
+    const task = uploadBytesResumable(sRef, file);
+
+    uploadTasks.set(path, task);
+
+    // cancel button
+    uploadingRow.querySelector('.cancel-upload').addEventListener('click', () => {
+      try { task.cancel(); uploadTasks.delete(path); uploadingRow.remove(); toast('Upload dibatalkan'); } catch(e) { console.warn(e); }
+    });
+
+    task.on('state_changed', (snap) => {
+      const pct = Math.round((snap.bytesTransferred / snap.totalBytes) * 100);
+      const fill = uploadingRow.querySelector('.progress-fill');
+      if (fill) fill.style.width = `${pct}%`;
+    }, (err) => {
+      console.error('upload error', err);
+      uploadingRow.remove();
+      toast(`Upload gagal: ${file.name}`);
+    }, async () => {
+      const url = await getDownloadURL(sRef);
+      // write metadata to Firestore
+      try {
+        await addDoc(collection(db, 'files'), {
+          name: file.name,
+          folderId: currentFolderId,
+          storagePath: path,
+          downloadURL: url,
+          size: file.size,
+          contentType: file.type,
+          createdAt: serverTimestamp(),
+          createdBy: currentUser.email
+        });
+        uploadingRow.remove();
+        toast(`Upload sukses: ${file.name}`);
+        logAudit('upload_file', { name: file.name, folder: currentFolderName });
+      } catch (err) {
+        console.error('write metadata error', err);
+        toast(`Gagal menyimpan metadata: ${file.name}`);
+      }
+      uploadTasks.delete(path);
+    });
+  }
+}
+
+/* =======================
+   Preview modal
+   ======================= */
+function previewFile(fileObj) {
+  previewBody.innerHTML = '';
+  previewDownload.href = fileObj.downloadURL || '#';
+  previewDownload.setAttribute('download', fileObj.name || 'file');
+  if ((fileObj.contentType || '').startsWith('image/')) {
+    const img = el('img', { src: fileObj.downloadURL, style: 'max-width:100%;height:auto' });
+    previewBody.appendChild(img);
+  } else if ((fileObj.contentType || '') === 'application/pdf' || (fileObj.name||'').toLowerCase().endsWith('.pdf')) {
+    const iframe = el('iframe', { src: fileObj.downloadURL, style: 'width:100%;height:70vh;border:none' });
+    previewBody.appendChild(iframe);
+  } else {
+    previewBody.innerHTML = `<p>Tidak dapat preview. Silakan download.</p>`;
+  }
+  previewModal.setAttribute('aria-hidden', 'false');
+}
+closePreview?.addEventListener('click', () => previewModal.setAttribute('aria-hidden', 'true'));
+
+/* =======================
+   Rename + soft delete + restore + perma delete
+   ======================= */
+async function renameFilePrompt(fileObj) {
+  const newName = prompt('Ubah nama file:', fileObj.name);
+  if (!newName || newName.trim() === '' || newName === fileObj.name) return;
+  try {
+    await updateDoc(doc(db, 'files', fileObj.id), { name: newName });
+    toast('Nama file diperbarui');
+    logAudit('rename_file', { id: fileObj.id, oldName: fileObj.name, newName });
+  } catch (err) {
+    console.error(err);
+    toast('Gagal mengganti nama file');
+  }
+}
+
+async function softDeleteFile(fileId) {
+  if (!confirm('Hapus file ini? Akan dipindahkan ke Recycle Bin')) return;
+  try {
+    await updateDoc(doc(db, 'files', fileId), { deleted: true, deletedAt: serverTimestamp(), deletedBy: currentUser.email });
+    toast('File dipindahkan ke Recycle Bin');
+    logAudit('soft_delete', { id: fileId });
+  } catch (err) {
+    console.error(err);
+    toast('Gagal menghapus file');
+  }
+}
+
+async function restoreFile(fileId) {
+  try {
+    await updateDoc(doc(db, 'files', fileId), { deleted: false, deletedAt: null, deletedBy: null });
+    toast('File dipulihkan');
+    logAudit('restore_file', { id: fileId });
+  } catch (err) {
+    console.error(err);
+    toast('Gagal restore file');
+  }
+}
+
+async function permaDeleteFile(fileId, storagePath) {
+  if (!confirm('Hapus permanen file? Tindakan ini tidak bisa dibatalkan.')) return;
+  try {
+    // delete storage object if path known
+    if (storagePath) {
+      try { await deleteObject(storageRef(storage, storagePath)); } catch (e) { console.warn('storage delete warn', e); }
+    }
+    await deleteDoc(doc(db, 'files', fileId));
+    toast('File dihapus permanen');
+    logAudit('perma_delete', { id: fileId });
+  } catch (err) {
+    console.error(err);
+    toast('Gagal menghapus permanen');
+  }
+}
+
+/* =======================
+   Recycle Bin view (simple)
+   ======================= */
+tabRecycle?.addEventListener('click', async () => {
+  showTab('recycle');
+  // fetch deleted files once
+  const q = query(collection(db, 'files'), where('deleted', '==', true), orderBy('deletedAt', 'desc'));
+  const snap = await getDocs(q);
+  fileList.innerHTML = '';
+  snap.forEach(docSnap => {
+    const f = { id: docSnap.id, ...docSnap.data() };
+    const row = el('li', { class: 'file-row deleted' },
+      el('div', { class: 'file-info' },
+        el('div', { class: 'file-icon' }, fileIconFor(f)),
+        el('div', { class: 'file-meta' },
+          el('div', { class: 'file-name' }, escapeHtml(f.name || '—')),
+          el('div', { class: 'file-sub' }, `Dihapus: ${f.deletedAt ? new Date(f.deletedAt.seconds*1000).toLocaleString() : '-'}`)
+        )
+      ),
+      el('div', { class: 'file-actions' },
+        el('button', { class: 'btn-action restore-btn' }, '↩️ Restore'),
+        el('button', { class: 'btn-action perma-btn' }, '🗑️ Hapus Permanen')
+      )
+    );
+    row.querySelector('.restore-btn').addEventListener('click', () => restoreFile(f.id));
+    row.querySelector('.perma-btn').addEventListener('click', () => permaDeleteFile(f.id, f.storagePath));
+    fileList.appendChild(row);
+  });
+});
+
+/* =======================
+   Tabs: show folders/files/settings
+   ======================= */
+tabFiles?.addEventListener('click', () => showTab('files'));
+tabSettings?.addEventListener('click', () => showTab('settings'));
+
+function showTab(name) {
+  // set button active classes
+  [tabFiles, tabRecycle, tabSettings].forEach(b => b.classList.remove('active'));
+  if (name === 'files') tabFiles.classList.add('active');
+  if (name === 'recycle') tabRecycle.classList.add('active');
+  if (name === 'settings') tabSettings.classList.add('active');
+
+  // show/hide content sections
+  foldersSection.style.display = (name === 'files') ? 'block' : 'none';
+  filesSection.style.display = (name === 'files' && currentFolderId) ? 'block' : (name === 'files' ? 'none' : filesSection.style.display);
+  // if settings, show placeholder
+  if (name === 'settings') {
+    fileList.innerHTML = '';
+    const settingsCard = el('div', { class: 'folder-card' }, el('div', {}, 'Pengaturan akan datang (roles, security rules guidance).'));
+    fileList.appendChild(settingsCard);
+  }
+}
+
+/* =======================
+   Audit logging helper
+   ======================= */
+async function logAudit(action, meta = {}) {
+  try {
     await addDoc(collection(db, 'auditLogs'), {
       action,
       meta,
       user: currentUser?.email || 'unknown',
       ts: serverTimestamp()
     });
-  }catch(e){
-    console.warn('audit log failed', e);
+  } catch (err) {
+    console.warn('Audit log failed', err);
   }
 }
 
-// ===== Theme toggle (dark mode) =====
-function initTheme(){
-  const t = localStorage.getItem('theme') || 'light';
-  if(t === 'dark') document.documentElement.setAttribute('data-theme','dark');
-}
-toggleThemeBtn?.addEventListener('click', ()=>{
-  const cur = document.documentElement.getAttribute('data-theme');
-  if(cur === 'dark'){ document.documentElement.removeAttribute('data-theme'); localStorage.setItem('theme','light'); }
-  else { document.documentElement.setAttribute('data-theme','dark'); localStorage.setItem('theme','dark'); }
-});
-initTheme();
+/* =======================
+   Misc: search & sort live
+   ======================= */
+globalSearch?.addEventListener('input', () => renderFileList());
+sortSelect?.addEventListener('change', () => renderFileList());
 
-// ===== Small helpers on load =====
-document.addEventListener('DOMContentLoaded', ()=> {
-  // hide original login if present
-  if(document.getElementById('login-section')) document.getElementById('login-section').style.display = 'none';
-  document.querySelector('.container').style.display = 'none';
+/* =======================
+   Keyboard shortcuts (basic)
+   ======================= */
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    // close preview and clear selection
+    previewModal?.setAttribute('aria-hidden','true');
+    clearSelection();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault();
+    globalSearch?.focus();
+  }
 });
+
+/* =======================
+   Initial setup
+   ======================= */
+document.addEventListener('DOMContentLoaded', () => {
+  // initial visibility
+  appSection.style.display = 'none';
+  loginSection.style.display = 'flex';
+  // small UX: clicking folder list when no folders exist shows message
+  if (!folderList || folderList.children.length === 0) {
+    // nothing — folders will load via realtime listener after auth
+  }
+});
+
+/* =======================
+   NOTE: Advanced features (placeholders)
+   =======================
+   - Expiring share links: implement via Cloud Function that returns signed URL
+   - Zip multiple files: implement Cloud Function to zip and return temporary URL
+   - Role management: create 'roles' collection in Firestore to control admin/editor/viewer
+   - Security: configure Firestore & Storage security rules to validate domain and roles
+   ======================= */
