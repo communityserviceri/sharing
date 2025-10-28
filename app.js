@@ -15,7 +15,7 @@ import {
   push,
   set,
   onValue,
-  get,
+  dbGet,
   query,
   orderByChild,
   equalTo,
@@ -120,7 +120,7 @@ function safeLog(...a) {
 // --- Role helper: load role from /users/{uid}/role ---
 async function loadUserRole(uid) {
   try {
-    const snap = await get(ref(db, `users/${uid}/role`));
+    const snap = await dbGet(ref(db, `users/${uid}/role`));
     if (snap.exists()) {
       return snap.val();
     } else {
@@ -135,7 +135,7 @@ async function loadUserRole(uid) {
 // --- Default folder structure creation ---
 async function initDefaultStructureIfNeeded() {
   try {
-    const rootSnap = await get(ref(db, "folders"));
+    const rootSnap = await dbGet(ref(db, "folders"));
     if (rootSnap.exists()) {
       // some folders exist; cache them
       const all = rootSnap.val();
@@ -173,7 +173,7 @@ async function initDefaultStructureIfNeeded() {
   try {
     await update(ref(db), updates);
     // refresh cache
-    const snap = await get(ref(db, "folders"));
+    const snap = await dbGet(ref(db, "folders"));
     if (snap.exists()) {
       const all = snap.val();
       Object.keys(all).forEach((k) => (foldersCache[k] = all[k]));
@@ -216,7 +216,7 @@ onAuthStateChanged(auth, async (user) => {
 
     // 🟢 Tambahan: pastikan user sudah ada di RTDB /users
     const userRef = ref(db, `users/${user.uid}`);
-    const userSnap = await get(userRef);
+    const userSnap = await dbGet(userRef);
     if (!userSnap.exists()) {
       await set(userRef, {
         email: user.email,
@@ -410,16 +410,110 @@ folderForm.addEventListener("submit", async (e) => {
 
 // --- Open folder: update state + reload children/files ---
 async function openFolder(id, name) {
+  // if opening Administration folder, show admin user manager (admin only)
+  if (id === 'administration') {
+    if (currentUser && (currentUserRole === 'admin' || currentUser.email === 'admin@atlantis.com')) {
+      breadcrumbs = [{ id: 'administration', name: 'Administration' }];
+      renderBreadcrumbs();
+        await renderAdminUserPanel();
+      currentFolder = id;
+      folderTitle.textContent = '👥 Administration - User Management';
+      return;
+    } else {
+      showToast('Tidak punya izin melihat Administration');
+      return;
+    }
+  }
+  // --- original logic for other folders ---
   currentFolder = id || null;
-  folderTitle.textContent = "📂 " + (name || "Root");
+  folderTitle.textContent = '📂 ' + (name || 'Root');
   if (dropArea) {
-    dropArea.innerHTML = `<p>Tarik & lepas file di sini, atau klik Upload</p><small class="muted">Folder saat ini: ${name || "Root"}</small>`;
+    dropArea.innerHTML = `<p>Tarik & lepas file di sini, atau klik Upload</p><small class="muted">Folder saat ini: ${name || 'Root'}</small>`;
   }
   renderBreadcrumbs();
   loadFoldersRealtime();
   loadFilesRealtime();
 }
 
+
+// --- Admin: render user list and allow role edits (shown when opening 'administration' folder) ---
+async function renderAdminUserPanel() {
+  if (!currentUser) return showToast("Harap login sebagai admin");
+  // clear UI areas
+  folderList.innerHTML = "";
+  fileList.innerHTML = "";
+  // header/title
+  folderTitle.textContent = "👥 Administration - Users";
+  // fetch all users
+  try {
+    const usersSnap = await dbGet(ref(db, "users"));
+    const users = usersSnap.exists() ? usersSnap.val() : {};
+    // render each user as a row in fileList
+    Object.entries(users).forEach(([uid, u]) => {
+      const li = el("li", "file-row");
+      li.dataset.uid = uid;
+      li.innerHTML = `
+        <div class="file-info">
+          <div style="min-width:220px;">
+            <strong>${u.email || uid}</strong>
+            <div class="file-sub">${u.name || ""} • ${u.createdAt ? new Date(u.createdAt).toLocaleString() : ""}</div>
+          </div>
+        </div>
+        <div class="file-actions">
+          <select data-role="${uid}">
+            <option value="staff" ${u.role === "staff" ? "selected" : ""}>Staff</option>
+            <option value="admin" ${u.role === "admin" ? "selected" : ""}>Admin</option>
+            <option value="hr" ${u.role === "hr" ? "selected" : ""}>HR</option>
+            <option value="sales" ${u.role === "sales" ? "selected" : ""}>Sales</option>
+            <option value="it" ${u.role === "it" ? "selected" : ""}>IT</option>
+            <option value="marketing" ${u.role === "marketing" ? "selected" : ""}>Marketing</option>
+            <option value="finance" ${u.role === "finance" ? "selected" : ""}>Finance</option>
+            <option value="warehouse" ${u.role === "warehouse" ? "selected" : ""}>Warehouse</option>
+          </select>
+          <button class="btn danger" data-remove="${uid}" title="Delete user">🗑️</button>
+        </div>
+      `;
+      fileList.appendChild(li);
+    });
+
+    // attach handlers for role change
+    fileList.querySelectorAll("select[data-role]").forEach((sel) => {
+      sel.onchange = async (e) => {
+        const uid = sel.getAttribute("data-role");
+        const newRole = sel.value;
+        try {
+          await update(ref(db, `users/${uid}`), { role: newRole });
+          showToast(`Role diperbarui: ${newRole}`);
+          // if we changed ourselves, update local role
+          if (uid === currentUser.uid) currentUserRole = newRole;
+        } catch (err) {
+          console.error("Update role failed:", err);
+          showToast("Gagal memperbarui role");
+        }
+      };
+    });
+
+    // attach handlers for remove (careful: this only removes user node, not auth)
+    fileList.querySelectorAll("button[data-remove]").forEach((btn) => {
+      btn.onclick = async (e) => {
+        const uid = btn.getAttribute("data-remove");
+        if (!confirm("Hapus node user ini dari RTDB? (tidak menghapus akun Auth)")) return;
+        try {
+          await remove(ref(db, `users/${uid}`));
+          showToast("User dihapus dari RTDB");
+          // re-render
+          renderAdminUserPanel();
+        } catch (err) {
+          console.error("Remove user node failed:", err);
+          showToast("Gagal menghapus user");
+        }
+      };
+    });
+  } catch (err) {
+    console.error("renderAdminUserPanel failed:", err);
+    showToast("Gagal memuat daftar user");
+  }
+}
 // --- Files realtime (per currentFolder) ---
 function loadFilesRealtime() {
   if (!currentUser) return;
@@ -427,7 +521,7 @@ function loadFilesRealtime() {
 
   // first, read folder metadata (to determine access rules)
   const folderRefPath = currentFolder ? `folders/${currentFolder}` : null;
-  get(ref(db, folderRefPath || "folders")).then(async (folderSnap) => {
+  dbGet(ref(db, folderRefPath || "folders")).then(async (folderSnap) => {
     // fetch files where folderId == currentFolder (note: RTDB doesn't index keys automatically —
     // ensure you've configured indexes if needed in console)
     const filesQuery = query(ref(db, "files"), orderByChild("folderId"), equalTo(currentFolder || null));
@@ -525,7 +619,7 @@ function attachFileRowHandlers() {
         await update(ref(db, `files/${id}`), { deleted: true, deletedAt: Date.now() });
         // decrement folder fileCount transactionally if had folderId
         try {
-          const fSnap = await get(ref(db, `files/${id}`));
+          const fSnap = await dbGet(ref(db, `files/${id}`));
           const fdata = fSnap.exists() ? fSnap.val() : null;
           if (fdata?.folderId) {
             const folderRef = ref(db, `folders/${fdata.folderId}/fileCount`);
@@ -597,7 +691,7 @@ async function bulkDownloadSelected() {
   showToast("Membuka file di tab baru untuk download...");
   for (const id of selected) {
     try {
-      const fdSnap = await get(ref(db, `files/${id}`));
+      const fdSnap = await dbGet(ref(db, `files/${id}`));
       const data = fdSnap.exists() ? fdSnap.val() : null;
       if (data?.url) window.open(data.url, "_blank");
     } catch (err) {
@@ -713,7 +807,7 @@ async function handleMoveFiles(e, targetFolderId) {
   const fileId = e.dataTransfer.getData("text/plain");
   if (!fileId) return;
   try {
-    const fSnap = await get(ref(db, `files/${fileId}`));
+    const fSnap = await dbGet(ref(db, `files/${fileId}`));
     const fdata = fSnap.exists() ? fSnap.val() : null;
     if (!fdata) return;
     const srcFolder = fdata.folderId || null;
@@ -723,7 +817,7 @@ async function handleMoveFiles(e, targetFolderId) {
     }
 
     // check permission: user must have write on target folder
-    const targetFolderSnap = await get(ref(db, `folders/${targetFolderId}`));
+    const targetFolderSnap = await dbGet(ref(db, `folders/${targetFolderId}`));
     const targetMeta = targetFolderSnap.exists() ? targetFolderSnap.val() : null;
     if (!checkFolderWritePermission(targetMeta)) {
       return showToast("Tidak punya izin menaruh file di folder tersebut");
@@ -874,7 +968,7 @@ function loadRecycleBin() {
           await update(ref(db, `files/${id}`), { deleted: false, deletedAt: null });
           // increment folder count if file had folderId
           try {
-            const fd = await get(ref(db, `files/${id}`));
+            const fd = await dbGet(ref(db, `files/${id}`));
             const data = fd.exists() ? fd.val() : null;
             if (data?.folderId) {
               const folderRef = ref(db, `folders/${data.folderId}/fileCount`);
