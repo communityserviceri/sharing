@@ -1,10 +1,13 @@
-// === Atlantis NAS v3.2 — Nested folders, better UX, persistence, batch actions ===
-// - Firebase modular SDK 11.0.1 (ES modules)
-// - Adds nested folders (parentId), breadcrumbs, selection/bulk actions,
-//   offline persistence, better listener handling, retry/display of index/rules errors.
-// - Drops in for existing index.html + styles.css without markup edits.
+// === Atlantis NAS — app.js (updated) ===
+// Features:
+// - Tabs (Files, Recycle Bin, Settings)
+// - Recycle bin (soft delete / restore / permanent delete)
+// - Nested folders (parentId), breadcrumbs, folder-in-folder explorer UI
+// - Real-time listeners via onSnapshot wrapped with safeOnSnapshot
+// - localCreatedAt to reduce duplicate/flash when using serverTimestamp
+// - Upload, move, bulk actions, preview, theme settings, offline persistence
 
-// --- Firebase imports ---
+// --- Firebase imports (modular) ---
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
 import {
   getAuth,
@@ -28,6 +31,8 @@ import {
   getDoc,
   getDocs,
   limit,
+  increment,
+  runTransaction,
 } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
 import {
   getStorage,
@@ -37,7 +42,7 @@ import {
   deleteObject,
 } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-storage.js";
 
-// --- Firebase config (pakai config project-mu) ---
+// --- Firebase config (ganti kalau perlu) ---
 const firebaseConfig = {
   apiKey: "AIzaSyBdKELW2FNsL7H1zB8R765czcDPaSYybdg",
   authDomain: "atlantis-store.firebaseapp.com",
@@ -55,19 +60,21 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
-// Enable offline persistence (best-effort; will log if not available)
+// Enable offline persistence (best-effort)
 enableIndexedDbPersistence(db).catch((err) => {
   console.warn("Firestore persistence not enabled:", err && err.code ? err.code : err);
 });
 
 // --- App state ---
 let currentUser = null;
-let currentFolder = null; // id of currently opened folder (null => root)
+let currentFolder = null; // folder id (null => root)
 let folderUnsub = null;
 let fileUnsub = null;
-let breadcrumbs = []; // array of {id, name}
+let breadcrumbs = []; // [{id, name}]
+let bulkControls = null;
+let activeTab = "files"; // "files" | "recycle" | "settings"
 
-// --- DOM refs (some dynamic elements created if needed) ---
+// --- DOM refs ---
 const loginSection = document.getElementById("login-section");
 const appSection = document.getElementById("app-section");
 const loginForm = document.getElementById("login-form");
@@ -85,11 +92,14 @@ const dropArea = document.getElementById("drop-area");
 const toast = document.getElementById("toast");
 const folderTitle = document.getElementById("folder-title");
 const globalSearch = document.getElementById("global-search");
+const tabFiles = document.getElementById("tab-files");
+const tabRecycle = document.getElementById("tab-recycle");
+const tabSettings = document.getElementById("tab-settings");
+const settingsPanel = document.getElementById("settings-panel");
+const settingsTheme = document.getElementById("settings-theme");
+const settingsEmail = document.getElementById("settings-email");
 
-// dynamic controls area (buttons for bulk actions)
-let bulkControls = null;
-
-// --- UTILS ---
+// --- Utilities ---
 function showToast(msg) {
   if (!toast) return;
   toast.textContent = msg;
@@ -114,9 +124,13 @@ function el(tag, cls = "", attrs = {}) {
   Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
   return e;
 }
-function safeLog(...a) { try { console.log(...a); } catch (e) {} }
+function safeLog(...a) {
+  try {
+    console.log(...a);
+  } catch (e) {}
+}
 
-// --- Robust onSnapshot wrapper with label + retry suggestion ---
+// Wrapper for onSnapshot with friendly messaging
 function safeOnSnapshot(q, onData, label = "listener") {
   try {
     return onSnapshot(
@@ -124,7 +138,6 @@ function safeOnSnapshot(q, onData, label = "listener") {
       (snap) => onData(snap),
       (err) => {
         console.warn(`Firestore ${label} error:`, err);
-        // detect likely errors and show helpful toast
         if (err && err.code === "failed-precondition") {
           showToast("⚠️ Firestore: index composite diperlukan. Cek console.");
         } else if (err && err.code === "permission-denied") {
@@ -164,14 +177,18 @@ onAuthStateChanged(auth, (user) => {
   if (user) {
     currentUser = user;
     document.getElementById("user-info").textContent = user.email;
+    settingsEmail.value = user.email || "";
     loginSection.style.display = "none";
     appSection.removeAttribute("aria-hidden");
     // reset to root view
     breadcrumbs = [{ id: null, name: "Root" }];
     currentFolder = null;
+    activeTab = "files";
     renderBreadcrumbs();
-    setTimeout(loadFoldersRealtime, 150);
-    // attach other listeners if needed
+    setActiveTabUI();
+    // start listeners
+    loadFoldersRealtime();
+    loadFilesRealtime();
   } else {
     currentUser = null;
     // clean up listeners
@@ -182,23 +199,16 @@ onAuthStateChanged(auth, (user) => {
   }
 });
 
-// --- NESTED FOLDERS ---
-// folder document structure:
-// { name, createdBy, parentId (nullable), createdAt, fileCount }
-
-// Render breadcrumbs
+// --- Breadcrumbs (render + navigation) ---
 function renderBreadcrumbs() {
-  // ensure container exists in top of right-col
   let bc = document.getElementById("breadcrumb");
   if (!bc) {
     bc = el("div", "breadcrumbs");
     bc.id = "breadcrumb";
-    // insert above files-header: find files-header
     const filesHeader = document.querySelector(".files-header");
     if (filesHeader && filesHeader.parentNode) {
       filesHeader.parentNode.insertBefore(bc, filesHeader);
     } else {
-      // fallback: prepend to right-col
       const right = document.querySelector(".right-col");
       if (right) right.prepend(bc);
     }
@@ -208,8 +218,6 @@ function renderBreadcrumbs() {
     const crumb = el("button", "btn crumb");
     crumb.textContent = idx === 0 ? b.name : " / " + b.name;
     crumb.onclick = () => {
-      // navigate to that breadcrumb
-      // trim breadcrumbs
       breadcrumbs = breadcrumbs.slice(0, idx + 1);
       const target = b.id || null;
       openFolder(target, b.name);
@@ -218,74 +226,77 @@ function renderBreadcrumbs() {
   });
 }
 
-// Load folders (only immediate children of currentFolder) realtime
+// --- Folder realtime (children of currentFolder) ---
+// Use localCreatedAt to minimize flash of duplicates
 function loadFoldersRealtime() {
   if (!currentUser) return;
-  // query: where createdBy == currentUser.email && parentId == currentFolder
+  // Query children where createdBy == currentUser.email && parentId == currentFolder
   const q = query(
     collection(db, "folders"),
     where("createdBy", "==", currentUser.email),
     where("parentId", "==", currentFolder || null),
-    orderBy("createdAt", "desc")
+    orderBy("localCreatedAt", "desc")
   );
   if (folderUnsub) folderUnsub();
   folderUnsub = safeOnSnapshot(
     q,
     (snap) => {
       folderList.innerHTML = "";
-      // header: "New Folder inside {name}"
       snap.forEach((docu) => {
         const f = docu.data();
         const div = el("div", "folder-card");
         div.dataset.id = docu.id;
-        // nested indentation not needed because we show only children
         div.innerHTML = `
           <span>📁 ${f.name}</span>
           <small class="small-muted">${f.fileCount || 0} file</small>
         `;
-        // Open folder (push breadcrumb)
         div.onclick = (e) => {
           e.stopPropagation();
           breadcrumbs.push({ id: docu.id, name: f.name });
           renderBreadcrumbs();
           openFolder(docu.id, f.name);
         };
-        // Drag target
+        // drag target for files
         div.ondragover = (e) => {
           e.preventDefault();
           div.classList.add("drag-over");
         };
         div.ondragleave = () => div.classList.remove("drag-over");
         div.ondrop = (e) => handleMoveFiles(e, docu.id);
-        // right-click context maybe (rename / delete) - simple prompt
-        div.oncontextmenu = (e) => {
+        // right-click: rename or delete folder
+        div.oncontextmenu = async (e) => {
           e.preventDefault();
           const choice = prompt("Rename folder (kosong = batalkan):", f.name);
           if (choice && choice.trim() !== f.name) {
-            updateDoc(doc(db, "folders", docu.id), { name: choice.trim() });
-            showToast("✏️ Nama folder diperbarui");
+            try {
+              await updateDoc(doc(db, "folders", docu.id), { name: choice.trim() });
+              showToast("✏️ Nama folder diperbarui");
+            } catch (err) {
+              console.error("Rename folder failed:", err);
+              showToast("Gagal mengganti nama folder");
+            }
           }
         };
         folderList.appendChild(div);
       });
-      // also show '..' (go up) if not root
-      // We'll handle go-up via breadcrumb so not adding here.
     },
     "folders"
   );
 }
 
-// Create folder (supports parent)
+// --- Create folder (supports parentId) ---
 folderForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = folderInput.value.trim();
   if (!name || !currentUser) return;
   try {
+    // add localCreatedAt to reduce flicker / duplication from serverTimestamp delay
     await addDoc(collection(db, "folders"), {
       name,
       createdBy: currentUser.email,
       parentId: currentFolder || null,
       createdAt: serverTimestamp(),
+      localCreatedAt: Date.now(),
       fileCount: 0,
     });
     folderInput.value = "";
@@ -296,25 +307,28 @@ folderForm.addEventListener("submit", async (e) => {
   }
 });
 
-// Open folder (set currentFolder, load its files and children)
+// --- Open folder: update state + reload children/files ---
 async function openFolder(id, name) {
   currentFolder = id || null;
   folderTitle.textContent = "📂 " + (name || "Root");
+  // update dropArea hint
+  if (dropArea) {
+    dropArea.innerHTML = `<p>Tarik & lepas file di sini, atau klik Upload</p><small class="muted">Folder saat ini: ${name || "Root"}</small>`;
+  }
   renderBreadcrumbs();
-  // load child folders again (this.keep real-time listener)
+  // refresh listeners
   loadFoldersRealtime();
-  // load files in this folder
   loadFilesRealtime();
 }
 
-// --- FILES (realtime per folder) ---
+// --- Files realtime (per currentFolder) ---
 function loadFilesRealtime() {
   if (!currentUser) return;
-  // Query files where folderId == currentFolder and owner == currentUser.email
   const q = query(
     collection(db, "files"),
     where("folderId", "==", currentFolder || null),
     where("owner", "==", currentUser.email),
+    where("deleted", "==", false),
     orderBy("createdAt", "desc")
   );
   if (fileUnsub) fileUnsub();
@@ -322,14 +336,12 @@ function loadFilesRealtime() {
     q,
     (snap) => {
       fileList.innerHTML = "";
-      // Create header controls for selection
       ensureBulkControls();
       snap.forEach((docu) => {
         const f = docu.data();
         const li = el("li", "file-row");
         li.dataset.id = docu.id;
         li.draggable = true;
-        // File meta
         const created = f.createdAt?.seconds
           ? new Date(f.createdAt.seconds * 1000).toLocaleString()
           : "baru";
@@ -346,20 +358,18 @@ function loadFilesRealtime() {
             <button class="btn danger" data-delete="${docu.id}" data-path="${f.storagePath}">🗑️</button>
           </div>
         `;
-        // drag start
         li.ondragstart = (e) => {
           e.dataTransfer.setData("text/plain", docu.id);
         };
         fileList.appendChild(li);
       });
-      // attach handlers for preview/delete buttons and checkboxes
       attachFileRowHandlers();
     },
     "files"
   );
 }
 
-// --- File row handlers (delegated) ---
+// --- File row handlers (preview, delete, checkboxes) ---
 function attachFileRowHandlers() {
   // preview
   fileList.querySelectorAll("button[data-preview]").forEach((btn) => {
@@ -368,33 +378,47 @@ function attachFileRowHandlers() {
       if (url) previewFile(url);
     };
   });
-  // delete
+  // delete (soft-delete -> move to recycle)
   fileList.querySelectorAll("button[data-delete]").forEach((btn) => {
     btn.onclick = async (e) => {
       const id = btn.getAttribute("data-delete");
-      const path = btn.getAttribute("data-path");
-      if (!id || !path) return;
-      if (!confirm("Hapus file ini?")) return;
+      if (!id) return;
+      if (!confirm("Hapus file ini? File akan dipindahkan ke Recycle Bin.")) return;
       try {
-        await deleteDoc(doc(db, "files", id));
-        await deleteObject(ref(storage, path)).catch((e) => {
-          // maybe file already missing — still okay
-          console.warn("Delete object error:", e);
+        await updateDoc(doc(db, "files", id), {
+          deleted: true,
+          deletedAt: serverTimestamp(),
         });
-        showToast("🗑️ File dihapus");
+        // decrement folder fileCount safely using transaction if folder exists
+        try {
+          const fd = await getDoc(doc(db, "files", id));
+          const fdata = fd.exists() ? fd.data() : null;
+          if (fdata?.folderId) {
+            const folderRef = doc(db, "folders", fdata.folderId);
+            await runTransaction(db, async (t) => {
+              const snap = await t.get(folderRef);
+              if (!snap.exists()) return;
+              const prev = snap.data().fileCount || 0;
+              t.update(folderRef, { fileCount: Math.max(0, prev - 1) });
+            });
+          }
+        } catch (txErr) {
+          console.warn("Adjust folder fileCount failed:", txErr);
+        }
+        showToast("🗑️ File dipindahkan ke Recycle Bin");
       } catch (err) {
-        console.error("Delete failed:", err);
-        showToast("Gagal menghapus file");
+        console.error("Soft-delete failed:", err);
+        showToast("Gagal memindahkan file ke Recycle Bin");
       }
     };
   });
-  // checkboxes: nothing more (bulkControls handles them)
+  // checkboxes
   fileList.querySelectorAll(".file-checkbox").forEach((cb) => {
     cb.onchange = updateBulkSelectionUI;
   });
 }
 
-// --- BULK ACTIONS UI / helpers ---
+// --- BULK UI & actions ---
 function ensureBulkControls() {
   if (bulkControls) return;
   bulkControls = el("div", "bulk-controls");
@@ -405,7 +429,6 @@ function ensureBulkControls() {
     <button id="clear-selection" class="btn">✖ Clear</button>
   `;
   document.body.appendChild(bulkControls);
-  // handlers
   bulkControls.querySelector("#clear-selection").onclick = () => {
     fileList.querySelectorAll(".file-checkbox").forEach((cb) => (cb.checked = false));
     updateBulkSelectionUI();
@@ -419,37 +442,25 @@ function updateBulkSelectionUI() {
   const selected = Array.from(fileList.querySelectorAll(".file-checkbox:checked"));
   if (!bulkControls) return;
   bulkControls.style.display = selected.length > 0 ? "block" : "none";
-  // maybe show count — quick visual
-  const dl = bulkControls.querySelector("#bulk-download");
-  dl.textContent = `⬇️ Download (${selected.length})`;
-  const del = bulkControls.querySelector("#bulk-delete");
-  del.textContent = `🗑️ Delete (${selected.length})`;
+  bulkControls.querySelector("#bulk-download").textContent = `⬇️ Download (${selected.length})`;
+  bulkControls.querySelector("#bulk-delete").textContent = `🗑️ Delete (${selected.length})`;
 }
 
 async function bulkDeleteSelected() {
   const selected = Array.from(fileList.querySelectorAll(".file-checkbox:checked")).map((c) => c.dataset.id);
   if (selected.length === 0) return showToast("Pilih file dulu");
-  if (!confirm(`Hapus ${selected.length} file?`)) return;
+  if (!confirm(`Hapus ${selected.length} file? File akan dipindahkan ke Recycle Bin.`)) return;
   for (const id of selected) {
     try {
-      // fetch doc to get storagePath
-      const fd = await getDoc(doc(db, "files", id));
-      const data = fd.exists() ? fd.data() : null;
-      if (data?.storagePath) {
-        await deleteObject(ref(storage, data.storagePath)).catch((e) => console.warn("Storage delete:", e));
-      }
-      await deleteDoc(doc(db, "files", id));
+      await updateDoc(doc(db, "files", id), { deleted: true, deletedAt: serverTimestamp() });
     } catch (err) {
-      console.error("Bulk delete error:", err);
-      showToast("Ada kesalahan saat menghapus beberapa file");
+      console.error("Bulk soft-delete error:", err);
     }
   }
-  showToast("🗑️ Bulk delete selesai");
+  showToast("🗑️ Beberapa file dipindahkan ke Recycle Bin");
 }
 
 async function bulkDownloadSelected() {
-  // Browser-side zip or parallel download is possible but heavy.
-  // We'll open each file in new tab to let user save (simple).
   const selected = Array.from(fileList.querySelectorAll(".file-checkbox:checked")).map((c) => c.dataset.id);
   if (selected.length === 0) return showToast("Pilih file dulu");
   showToast("Membuka file di tab baru untuk download...");
@@ -457,16 +468,14 @@ async function bulkDownloadSelected() {
     try {
       const fd = await getDoc(doc(db, "files", id));
       const data = fd.exists() ? fd.data() : null;
-      if (data?.url) {
-        window.open(data.url, "_blank");
-      }
+      if (data?.url) window.open(data.url, "_blank");
     } catch (err) {
       console.warn("Open file failed:", err);
     }
   }
 }
 
-// --- Upload (with global progress indicator) ---
+// --- Upload handling ---
 let globalProgressEl = null;
 function ensureGlobalProgress() {
   if (globalProgressEl) return;
@@ -506,18 +515,13 @@ dropArea.ondrop = (e) => {
 };
 
 function handleFilesUpload(files) {
-  if (!currentFolder && currentFolder !== null) {
-    // should not happen, but guard
-    showToast("Pilih folder dulu!");
-    return;
-  }
   if (!currentUser) return showToast("Harap login dulu");
   const arr = [...files];
   if (arr.length === 0) return;
   showGlobalProgress(`Uploading ${arr.length} file(s)...`);
   let completed = 0;
   arr.forEach((file) => {
-    const path = `${currentUser.uid}/${currentFolder || "root"}/${file.name}`;
+    const path = `${currentUser.uid}/${currentFolder || "root"}/${Date.now()}_${file.name}`;
     const storageRef = ref(storage, path);
     const task = uploadBytesResumable(storageRef, file);
     task.on(
@@ -533,7 +537,7 @@ function handleFilesUpload(files) {
       async () => {
         try {
           const url = await getDownloadURL(task.snapshot.ref);
-          await addDoc(collection(db, "files"), {
+          const docRef = await addDoc(collection(db, "files"), {
             name: file.name,
             size: file.size,
             folderId: currentFolder || null,
@@ -541,20 +545,21 @@ function handleFilesUpload(files) {
             storagePath: path,
             url,
             createdAt: serverTimestamp(),
+            localCreatedAt: Date.now(),
+            deleted: false,
           });
-          // Optionally update folder's fileCount (increment)
+          // increment folder fileCount safely
           if (currentFolder) {
-            const folderDocRef = doc(db, "folders", currentFolder);
-            // naive increment: read -> update (race possible)
-            // for production, use transactions (omitted for clarity)
+            const folderRef = doc(db, "folders", currentFolder);
             try {
-              const fdoc = await getDoc(folderDocRef);
-              if (fdoc.exists()) {
-                const prev = fdoc.data().fileCount || 0;
-                await updateDoc(folderDocRef, { fileCount: prev + 1 });
-              }
+              await runTransaction(db, async (t) => {
+                const fSnap = await t.get(folderRef);
+                if (!fSnap.exists()) return;
+                const prev = fSnap.data().fileCount || 0;
+                t.update(folderRef, { fileCount: prev + 1 });
+              });
             } catch (e) {
-              console.warn("folder fileCount update failed:", e);
+              console.warn("Folder fileCount increment failed:", e);
             }
           }
           completed++;
@@ -572,13 +577,45 @@ function handleFilesUpload(files) {
   });
 }
 
-// --- Drag/drop files to move between folders ---
+// --- Move file by drag/drop into folder ---
 async function handleMoveFiles(e, targetFolderId) {
   e.preventDefault();
   const fileId = e.dataTransfer.getData("text/plain");
   if (!fileId) return;
   try {
+    // fetch current file doc to adjust fileCount on source & target
+    const fd = await getDoc(doc(db, "files", fileId));
+    const fdata = fd.exists() ? fd.data() : null;
+    if (!fdata) return;
+    const srcFolder = fdata.folderId || null;
+    if (srcFolder === targetFolderId) {
+      showToast("File sudah berada di folder tersebut");
+      return;
+    }
     await updateDoc(doc(db, "files", fileId), { folderId: targetFolderId });
+    // adjust counts (transactionally)
+    try {
+      if (srcFolder) {
+        const srcRef = doc(db, "folders", srcFolder);
+        await runTransaction(db, async (t) => {
+          const sSnap = await t.get(srcRef);
+          if (!sSnap.exists()) return;
+          const prev = sSnap.data().fileCount || 0;
+          t.update(srcRef, { fileCount: Math.max(0, prev - 1) });
+        });
+      }
+      if (targetFolderId) {
+        const tgtRef = doc(db, "folders", targetFolderId);
+        await runTransaction(db, async (t) => {
+          const tSnap = await t.get(tgtRef);
+          if (!tSnap.exists()) return;
+          const prev = tSnap.data().fileCount || 0;
+          t.update(tgtRef, { fileCount: prev + 1 });
+        });
+      }
+    } catch (e) {
+      console.warn("Adjust folder counts after move failed:", e);
+    }
     showToast("📦 File dipindahkan");
   } catch (err) {
     console.error("Move failed:", err);
@@ -586,7 +623,7 @@ async function handleMoveFiles(e, targetFolderId) {
   }
 }
 
-// --- Preview modal (simple) ---
+// --- Preview ---
 window.previewFile = (url) => {
   const modal = document.getElementById("preview-modal");
   const body = document.getElementById("preview-body");
@@ -598,14 +635,13 @@ window.previewFile = (url) => {
 document.getElementById("close-preview").onclick = () =>
   document.getElementById("preview-modal").setAttribute("aria-hidden", "true");
 
-// --- Search (debounced) ---
+// --- SEARCH (debounced on client-side) ---
 let searchTimer = null;
 globalSearch.addEventListener("input", () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     const term = globalSearch.value.trim().toLowerCase();
     if (!term) {
-      // show all
       Array.from(fileList.children).forEach((li) => (li.style.display = ""));
       return;
     }
@@ -624,25 +660,144 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// --- Theme toggle (kept) ---
+// --- Theme handling ---
 const themeBtn = document.getElementById("toggle-theme");
 themeBtn.onclick = () => {
   const cur = document.documentElement.dataset.theme;
   const next = cur === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = next;
   localStorage.setItem("theme", next);
+  if (settingsTheme) settingsTheme.value = next;
 };
 document.documentElement.dataset.theme =
   localStorage.getItem("theme") ||
   (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+if (settingsTheme) settingsTheme.value = document.documentElement.dataset.theme;
+settingsTheme?.addEventListener("change", (e) => {
+  const v = e.target.value;
+  if (v === "auto") {
+    const auto = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.dataset.theme = auto;
+    localStorage.setItem("theme", auto);
+  } else {
+    document.documentElement.dataset.theme = v;
+    localStorage.setItem("theme", v);
+  }
+});
 
-// --- Initial bootstrap: render root breadcrumb and UI polish setup ---
+// --- Tabs: Files / Recycle / Settings ---
+function setActiveTabUI() {
+  // toggle active classes and visibility
+  tabFiles.classList.toggle("active", activeTab === "files");
+  tabRecycle.classList.toggle("active", activeTab === "recycle");
+  tabSettings.classList.toggle("active", activeTab === "settings");
+
+  // content area shown only for files tab
+  const content = document.querySelector(".content");
+  if (content) content.style.display = activeTab === "files" ? "flex" : "none";
+  // settings panel toggle
+  settingsPanel.setAttribute("aria-hidden", activeTab === "settings" ? "false" : "true");
+
+  // load appropriate data/listeners
+  if (activeTab === "files") {
+    loadFoldersRealtime();
+    loadFilesRealtime();
+  } else if (activeTab === "recycle") {
+    loadRecycleBin();
+  } else if (activeTab === "settings") {
+    // nothing special (settings panel already shows)
+  }
+}
+tabFiles.onclick = () => { activeTab = "files"; setActiveTabUI(); };
+tabRecycle.onclick = () => { activeTab = "recycle"; setActiveTabUI(); };
+tabSettings.onclick = () => { activeTab = "settings"; setActiveTabUI(); };
+
+// --- Recycle Bin: realtime view of deleted files ---
+function loadRecycleBin() {
+  if (!currentUser) return;
+  const q = query(
+    collection(db, "files"),
+    where("owner", "==", currentUser.email),
+    where("deleted", "==", true),
+    orderBy("deletedAt", "desc")
+  );
+  if (fileUnsub) fileUnsub();
+  fileUnsub = safeOnSnapshot(q, (snap) => {
+    fileList.innerHTML = "";
+    snap.forEach((docu) => {
+      const f = docu.data();
+      const li = el("li", "file-row");
+      li.innerHTML = `
+        <div class="file-info">
+          🗑️ <span class="file-name">${f.name}</span>
+          <div class="file-sub">${formatBytes(f.size)} • ${
+        f.deletedAt?.seconds ? new Date(f.deletedAt.seconds * 1000).toLocaleString() : "baru"
+      }</div>
+        </div>
+        <div class="file-actions">
+          <button class="btn" data-restore="${docu.id}">♻️ Restore</button>
+          <button class="btn danger" data-permadelete="${docu.id}" data-path="${f.storagePath}">❌ Hapus Permanen</button>
+        </div>
+      `;
+      fileList.appendChild(li);
+    });
+    // attach restore / permanent delete
+    fileList.querySelectorAll("button[data-restore]").forEach((btn) => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute("data-restore");
+        if (!id) return;
+        try {
+          await updateDoc(doc(db, "files", id), { deleted: false, deletedAt: null });
+          // optionally increment folder count if file had folderId
+          try {
+            const fd = await getDoc(doc(db, "files", id));
+            const data = fd.exists() ? fd.data() : null;
+            if (data?.folderId) {
+              const folderRef = doc(db, "folders", data.folderId);
+              await runTransaction(db, async (t) => {
+                const snap = await t.get(folderRef);
+                if (!snap.exists()) return;
+                const prev = snap.data().fileCount || 0;
+                t.update(folderRef, { fileCount: prev + 1 });
+              });
+            }
+          } catch (e) {
+            console.warn("Restore: increment folder failed", e);
+          }
+          showToast("♻️ Dipulihkan");
+        } catch (err) {
+          console.error("Restore failed:", err);
+          showToast("Gagal memulihkan file");
+        }
+      };
+    });
+    fileList.querySelectorAll("button[data-permadelete]").forEach((btn) => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute("data-permadelete");
+        const path = btn.getAttribute("data-path");
+        if (!id) return;
+        if (!confirm("Hapus permanen file ini? Tindakan ini tidak bisa dibatalkan.")) return;
+        try {
+          await deleteDoc(doc(db, "files", id));
+          if (path) {
+            await deleteObject(ref(storage, path)).catch((e) => console.warn("Storage delete:", e));
+          }
+          showToast("❌ File dihapus permanen");
+        } catch (err) {
+          console.error("Permanent delete failed:", err);
+          showToast("Gagal menghapus file permanen");
+        }
+      };
+    });
+  }, "recycle");
+}
+
+// --- Initial bootstrap & UI polish ---
 (function init() {
   breadcrumbs = [{ id: null, name: "Root" }];
   renderBreadcrumbs();
-  // small polish: show 'Drag files here' hint
   dropArea.innerHTML = `<p>Tarik & lepas file di sini, atau klik Upload</p><small class="muted">Folder saat ini: Root</small>`;
-  showToast("Atlantis NAS siap (v3.2)");
+  showToast("Atlantis NAS siap (updated)");
 })();
 
-safeLog("Atlantis NAS v3.2 loaded");
+safeLog("Atlantis NAS updated app.js loaded");
