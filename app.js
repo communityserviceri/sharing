@@ -34,16 +34,28 @@ import {
   deleteObject
 } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-storage.js";
 
-// Config Firebase kamu di sini 👇
+// Import the functions you need from the SDKs you need
+import { initializeApp } from "firebase/app";
+import { getAnalytics } from "firebase/analytics";
+// TODO: Add SDKs for Firebase products that you want to use
+// https://firebase.google.com/docs/web/setup#available-libraries
+
+// Your web app's Firebase configuration
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
-  apiKey: "ISI_APIKEY_KAMU",
-  authDomain: "ISI.firebaseapp.com",
-  projectId: "ISI",
-  storageBucket: "ISI.appspot.com",
-  messagingSenderId: "ISI",
-  appId: "ISI"
+  apiKey: "AIzaSyBdKELW2FNsL7H1zB8R765czcDPaSYybdg",
+  authDomain: "atlantis-store.firebaseapp.com",
+  databaseURL: "https://atlantis-store-default-rtdb.firebaseio.com",
+  projectId: "atlantis-store",
+  storageBucket: "atlantis-store.appspot.com",
+  messagingSenderId: "566295949160",
+  appId: "1:566295949160:web:2edd2bd1c4b74277a5f0dd",
+  measurementId: "G-ERXQQKY7HM"
 };
 
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const analytics = getAnalytics(app);
 // Initialize
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -310,3 +322,4 @@ function showToast(msg) {
   toast.style.display = "block";
   setTimeout(() => (toast.style.display = "none"), 2500);
 }
+
