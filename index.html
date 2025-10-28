@@ -3,96 +3,93 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Atlantis NAS — Admin Panel</title>
+  <title>Atlantis NAS v2.0</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
+  <!-- 🔒 Login -->
+  <section id="login-section" class="login-section">
+    <div class="login-card">
       <h1>🌊 Atlantis NAS</h1>
-      <small class="tagline">Secure Admin File Sharing</small>
+      <p>Masuk dengan akun @atlantis.com</p>
+      <form id="login-form">
+        <input id="login-email" type="email" placeholder="Email @atlantis.com" required />
+        <input id="login-password" type="password" placeholder="Kata sandi" required />
+        <button type="submit">Masuk</button>
+        <p id="login-error" class="error-text"></p>
+      </form>
     </div>
-    <div class="top-actions">
-      <input id="global-search" type="search" placeholder="Cari file atau folder..." aria-label="search"/>
-      <button id="toggle-theme" title="Toggle dark mode">🌓</button>
-      <span id="user-info-small"></span>
-      <button id="logout-btn" class="ghost">Logout</button>
-    </div>
-  </header>
+  </section>
 
-  <div class="container">
+  <!-- 🧭 Dashboard -->
+  <div class="app-container" id="app-section">
     <aside class="sidebar">
-      <section class="user-panel">
-        <p id="user-info"></p>
-      </section>
-
-      <nav class="nav">
-        <button id="btn-folders" class="active">Folder</button>
-        <button id="btn-recycle">Recycle Bin</button>
-        <button id="btn-settings">Settings</button>
+      <div class="logo">
+        <h2>🌊 Atlantis NAS</h2>
+      </div>
+      <div class="user-info" id="user-info"></div>
+      <nav>
+        <button id="tab-files" class="active">📁 Files</button>
+        <button id="tab-recycle">🗑️ Recycle Bin</button>
+        <button id="tab-settings">⚙️ Settings</button>
       </nav>
-
-      <section class="new-folder">
-        <form id="folder-form">
-          <input type="text" id="folder-name" placeholder="Nama folder baru..." required />
-          <button type="submit">Buat Folder</button>
-        </form>
-      </section>
+      <button id="logout-btn" class="logout-btn">Keluar</button>
     </aside>
 
     <main class="main">
-      <div class="toolbar">
-        <div class="breadcrumb" id="breadcrumb">All Folders</div>
-        <div class="actions">
-          <button id="upload-btn" disabled>📤 Upload</button>
-          <button id="bulk-delete" disabled title="Hapus terpilih">🗑️</button>
-          <button id="select-all">Pilih Semua</button>
-          <select id="sort-select" aria-label="Sort">
+      <header class="topbar">
+        <input type="search" id="global-search" placeholder="Cari file..." />
+        <div class="topbar-actions">
+          <select id="sort-select">
             <option value="createdAt">Terbaru</option>
             <option value="name">Nama</option>
             <option value="size">Ukuran</option>
           </select>
+          <button id="toggle-theme">🌓</button>
         </div>
-      </div>
+      </header>
 
-      <section class="folders" id="folders-section">
-        <h2>📁 Folder</h2>
-        <div id="folder-list" class="folder-grid"></div>
-      </section>
-
-      <section class="files" id="files-section">
-        <h2 id="folder-title">🗂 Pilih Folder</h2>
-
-        <div id="drop-area" class="drop-area">
-          <p>Tarik & lepaskan file di sini, atau klik Upload</p>
-          <input type="file" id="file-input" multiple hidden />
-        </div>
-
-        <div id="file-controls" class="file-controls">
-          <span id="file-count"></span>
-          <span id="upload-status"></span>
+      <section class="content">
+        <div id="folders-section">
+          <div class="section-header">
+            <h2>Folder</h2>
+            <form id="folder-form">
+              <input type="text" id="folder-name" placeholder="Nama folder baru..." required />
+              <button type="submit">Tambah</button>
+            </form>
+          </div>
+          <div id="folder-list" class="folder-grid"></div>
         </div>
 
-        <ul id="file-list" class="file-list"></ul>
+        <div id="files-section" class="hidden">
+          <div class="section-header">
+            <h2 id="folder-title">🗂 Pilih Folder</h2>
+            <div>
+              <button id="upload-btn" disabled>📤 Upload</button>
+              <input type="file" id="file-input" multiple hidden />
+            </div>
+          </div>
+
+          <div id="drop-area" class="drop-area">
+            <p>Tarik & lepas file di sini atau klik Upload</p>
+          </div>
+
+          <ul id="file-list" class="file-list"></ul>
+        </div>
       </section>
     </main>
   </div>
 
-  <!-- Modal Preview -->
+  <!-- 🔍 Modal Preview -->
   <div id="preview-modal" class="modal" aria-hidden="true">
     <div class="modal-content">
-      <button class="close-modal" id="close-preview">✖</button>
+      <button id="close-preview" class="close-modal">✖</button>
       <div id="preview-body"></div>
-      <div class="modal-actions">
-        <a id="preview-download" href="#" target="_blank">Download</a>
-        <button id="copy-link">Copy Link</button>
-      </div>
+      <a id="preview-download" href="#" target="_blank">⬇️ Download</a>
     </div>
   </div>
 
-  <footer class="site-footer">
-    <p>© 2025 Atlantis Store</p>
-  </footer>
+  <div id="toast" class="toast"></div>
 
   <script type="module" src="app.js"></script>
 </body>
