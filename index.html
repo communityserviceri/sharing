@@ -1,104 +1,98 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Atlantis Folder Sharing — Admin</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Atlantis NAS — Admin Panel</title>
   <link rel="stylesheet" href="styles.css" />
-  <link rel="icon" href="data:," />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <h1>🌊 Atlantis — Admin</h1>
-      <small>Secure Folder Sharing</small>
+      <h1>🌊 Atlantis NAS</h1>
+      <small class="tagline">Secure Admin File Sharing</small>
     </div>
-    <div id="top-actions" class="top-actions" aria-hidden="true">
-      <span id="user-info" class="user-badge"></span>
-      <button id="logout-btn" class="btn btn-ghost">Logout</button>
+    <div class="top-actions">
+      <input id="global-search" type="search" placeholder="Cari file atau folder..." aria-label="search"/>
+      <button id="toggle-theme" title="Toggle dark mode">🌓</button>
+      <span id="user-info-small"></span>
+      <button id="logout-btn" class="ghost">Logout</button>
     </div>
   </header>
 
-  <!-- login -->
-  <main class="container">
-    <section id="login-section" class="card login-card" aria-labelledby="login-title">
-      <h2 id="login-title">🔐 Login Admin</h2>
-      <form id="login-form" class="form">
-        <input id="login-email" type="email" placeholder="Email" required autocomplete="username"/>
-        <input id="login-password" type="password" placeholder="Password" required autocomplete="current-password" />
-        <button class="btn">Login</button>
-        <p id="login-error" class="error"></p>
-      </form>
-      <p class="muted">Hanya akun <strong>admin@atlantis.com</strong> yang diberi akses.</p>
-    </section>
-
-    <!-- app (hidden until login) -->
-    <section id="app-section" class="app-grid" style="display:none;">
-      <aside class="panel left">
-        <div class="panel-header">
-          <h3>📁 Folder</h3>
-          <div class="row">
-            <input id="folder-search" type="search" placeholder="Cari folder..." />
-            <button id="new-folder-toggle" class="btn btn-sm">+ Folder</button>
-          </div>
-        </div>
-
-        <form id="folder-form" class="create-row" style="display:none;">
-          <input id="folder-name" type="text" placeholder="Nama folder baru..." required />
-          <button type="submit" class="btn btn-sm">Buat</button>
-          <button id="folder-cancel" type="button" class="btn btn-ghost btn-sm">Batal</button>
-        </form>
-
-        <ul id="folder-list" class="list"></ul>
-      </aside>
-
-      <section class="panel right">
-        <div class="panel-header">
-          <h3 id="folder-title">🗂 Pilih Folder</h3>
-          <div class="row">
-            <input id="file-search" type="search" placeholder="Cari file..." />
-            <div class="upload-controls">
-              <label class="btn btn-sm btn-upload" for="file-input">📤 Upload</label>
-              <input id="file-input" type="file" hidden />
-              <button id="clear-selection" class="btn btn-ghost btn-sm" title="Clear selection">✖</button>
-            </div>
-          </div>
-        </div>
-
-        <div id="drop-zone" class="drop-zone">Tarik & lepas file di sini, atau klik Upload</div>
-        <div id="upload-progress" class="progress" hidden>
-          <div id="upload-progress-bar" class="progress-bar" style="width:0%"></div>
-        </div>
-
-        <ul id="file-list" class="list file-list" aria-live="polite"></ul>
+  <div class="container">
+    <aside class="sidebar">
+      <section class="user-panel">
+        <p id="user-info"></p>
       </section>
-    </section>
-  </main>
 
-  <footer class="footer">
-    <small>© 2025 Atlantis Store</small>
-  </footer>
+      <nav class="nav">
+        <button id="btn-folders" class="active">Folder</button>
+        <button id="btn-recycle">Recycle Bin</button>
+        <button id="btn-settings">Settings</button>
+      </nav>
 
-  <!-- MODALS / TOAST -->
-  <div id="preview-modal" class="modal" hidden>
+      <section class="new-folder">
+        <form id="folder-form">
+          <input type="text" id="folder-name" placeholder="Nama folder baru..." required />
+          <button type="submit">Buat Folder</button>
+        </form>
+      </section>
+    </aside>
+
+    <main class="main">
+      <div class="toolbar">
+        <div class="breadcrumb" id="breadcrumb">All Folders</div>
+        <div class="actions">
+          <button id="upload-btn" disabled>📤 Upload</button>
+          <button id="bulk-delete" disabled title="Hapus terpilih">🗑️</button>
+          <button id="select-all">Pilih Semua</button>
+          <select id="sort-select" aria-label="Sort">
+            <option value="createdAt">Terbaru</option>
+            <option value="name">Nama</option>
+            <option value="size">Ukuran</option>
+          </select>
+        </div>
+      </div>
+
+      <section class="folders" id="folders-section">
+        <h2>📁 Folder</h2>
+        <div id="folder-list" class="folder-grid"></div>
+      </section>
+
+      <section class="files" id="files-section">
+        <h2 id="folder-title">🗂 Pilih Folder</h2>
+
+        <div id="drop-area" class="drop-area">
+          <p>Tarik & lepaskan file di sini, atau klik Upload</p>
+          <input type="file" id="file-input" multiple hidden />
+        </div>
+
+        <div id="file-controls" class="file-controls">
+          <span id="file-count"></span>
+          <span id="upload-status"></span>
+        </div>
+
+        <ul id="file-list" class="file-list"></ul>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal Preview -->
+  <div id="preview-modal" class="modal" aria-hidden="true">
     <div class="modal-content">
-      <button class="modal-close" id="preview-close">✖</button>
+      <button class="close-modal" id="close-preview">✖</button>
       <div id="preview-body"></div>
+      <div class="modal-actions">
+        <a id="preview-download" href="#" target="_blank">Download</a>
+        <button id="copy-link">Copy Link</button>
+      </div>
     </div>
   </div>
 
-  <div id="rename-modal" class="modal" hidden>
-    <div class="modal-content">
-      <button class="modal-close" id="rename-close">✖</button>
-      <h4>Ubah Nama</h4>
-      <form id="rename-form" class="form-inline">
-        <input id="rename-input" type="text" required />
-        <button class="btn btn-sm">Simpan</button>
-      </form>
-    </div>
-  </div>
-
-  <div id="toast" class="toast" hidden></div>
+  <footer class="site-footer">
+    <p>© 2025 Atlantis Store</p>
+  </footer>
 
   <script type="module" src="app.js"></script>
 </body>
