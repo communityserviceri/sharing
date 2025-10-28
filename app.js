@@ -206,8 +206,6 @@ logoutBtn.addEventListener("click", () => {
   signOut(auth).catch((e) => console.warn("Signout failed:", e));
 });
 
-import { get, set, ref } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
-
 onAuthStateChanged(auth, async (user) => {
   if (user) {
     currentUser = user;
@@ -931,5 +929,6 @@ function loadRecycleBin() {
 })();
 
 safeLog("Atlantis NAS RTDB app.js loaded");
+
 
 
