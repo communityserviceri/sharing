@@ -2,127 +2,103 @@
 <html lang="id">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Atlantis NAS — Clean Cloud Pro</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Atlantis Folder Sharing — Admin</title>
   <link rel="stylesheet" href="styles.css" />
-
-  <!-- Material Icons + Font -->
-  <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-
-  <!-- SweetAlert2 + Chart.js -->
-  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="icon" href="data:," />
 </head>
 <body>
-  <div class="layout">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="logo">☁️</div>
-        <div class="brand-text">
-          <h1>Atlantis NAS</h1>
-          <p>Admin Panel</p>
-        </div>
-      </div>
+  <header class="topbar">
+    <div class="brand">
+      <h1>🌊 Atlantis — Admin</h1>
+      <small>Secure Folder Sharing</small>
+    </div>
+    <div id="top-actions" class="top-actions" aria-hidden="true">
+      <span id="user-info" class="user-badge"></span>
+      <button id="logout-btn" class="btn btn-ghost">Logout</button>
+    </div>
+  </header>
 
-      <nav class="nav">
-        <button class="nav-btn active" data-view="folders"><span class="material-icons-outlined">folder</span> Folder</button>
-        <button class="nav-btn" data-view="files"><span class="material-icons-outlined">description</span> Files</button>
-        <button class="nav-btn" data-view="storage"><span class="material-icons-outlined">bar_chart</span> Storage</button>
-        <button class="nav-btn" data-view="activity"><span class="material-icons-outlined">history</span> Activity</button>
-      </nav>
+  <!-- login -->
+  <main class="container">
+    <section id="login-section" class="card login-card" aria-labelledby="login-title">
+      <h2 id="login-title">🔐 Login Admin</h2>
+      <form id="login-form" class="form">
+        <input id="login-email" type="email" placeholder="Email" required autocomplete="username"/>
+        <input id="login-password" type="password" placeholder="Password" required autocomplete="current-password" />
+        <button class="btn">Login</button>
+        <p id="login-error" class="error"></p>
+      </form>
+      <p class="muted">Hanya akun <strong>admin@atlantis.com</strong> yang diberi akses.</p>
+    </section>
 
-      <footer class="sidebar-footer">
-        <p id="user-info">—</p>
-        <button id="logout-btn" class="logout-btn">
-          <span class="material-icons-outlined">logout</span> Logout
-        </button>
-      </footer>
-    </aside>
-
-    <main class="main">
-      <header class="toolbar">
-        <div class="toolbar-left">
-          <div class="breadcrumb">Home / <span id="breadcrumb-current">Folders</span></div>
-          <div class="search-group">
-            <span class="material-icons-outlined">search</span>
-            <input id="search-box" placeholder="Cari folder atau file..." />
+    <!-- app (hidden until login) -->
+    <section id="app-section" class="app-grid" style="display:none;">
+      <aside class="panel left">
+        <div class="panel-header">
+          <h3>📁 Folder</h3>
+          <div class="row">
+            <input id="folder-search" type="search" placeholder="Cari folder..." />
+            <button id="new-folder-toggle" class="btn btn-sm">+ Folder</button>
           </div>
         </div>
 
-        <div class="toolbar-right">
-          <select id="sort-select">
-            <option value="createdAt_desc">Terbaru</option>
-            <option value="createdAt_asc">Terlama</option>
-            <option value="name_asc">Nama A–Z</option>
-            <option value="name_desc">Nama Z–A</option>
-          </select>
-          <button id="upload-btn" class="btn-primary">
-            <span class="material-icons-outlined">upload_file</span> Upload
-          </button>
-          <input type="file" id="file-input" multiple hidden />
-        </div>
-      </header>
+        <form id="folder-form" class="create-row" style="display:none;">
+          <input id="folder-name" type="text" placeholder="Nama folder baru..." required />
+          <button type="submit" class="btn btn-sm">Buat</button>
+          <button id="folder-cancel" type="button" class="btn btn-ghost btn-sm">Batal</button>
+        </form>
 
-      <section id="view-folders" class="view active">
-        <div class="panel">
-          <div class="panel-header">
-            <h2>📁 Folder</h2>
-            <form id="folder-form">
-              <input id="folder-name" placeholder="Nama folder baru..." required />
-              <button type="submit" class="btn-secondary">Buat</button>
-            </form>
-          </div>
-          <div id="folder-grid" class="grid"></div>
-        </div>
-      </section>
+        <ul id="folder-list" class="list"></ul>
+      </aside>
 
-      <section id="view-files" class="view">
-        <div class="panel">
-          <div class="panel-header">
-            <h2 id="folder-title">🗂 Pilih Folder</h2>
-            <div class="bulk-actions">
-              <button id="download-selected" class="btn-secondary">Unduh</button>
-              <button id="delete-selected" class="btn-danger">Hapus</button>
-            </div>
-          </div>
-          <div id="file-grid" class="grid"></div>
-        </div>
-      </section>
-
-      <section id="view-storage" class="view">
-        <div class="panel">
-          <div class="panel-header"><h2>📊 Storage Usage</h2></div>
-          <div class="storage-container">
-            <canvas id="storage-chart"></canvas>
-            <div class="storage-info">
-              <div class="storage-bar"><div id="storage-used"></div></div>
-              <p id="storage-summary">Menghitung...</p>
+      <section class="panel right">
+        <div class="panel-header">
+          <h3 id="folder-title">🗂 Pilih Folder</h3>
+          <div class="row">
+            <input id="file-search" type="search" placeholder="Cari file..." />
+            <div class="upload-controls">
+              <label class="btn btn-sm btn-upload" for="file-input">📤 Upload</label>
+              <input id="file-input" type="file" hidden />
+              <button id="clear-selection" class="btn btn-ghost btn-sm" title="Clear selection">✖</button>
             </div>
           </div>
         </div>
-      </section>
 
-      <section id="view-activity" class="view">
-        <div class="panel">
-          <div class="panel-header"><h2>📜 Activity Log</h2></div>
-          <ul id="activity-list" class="activity-list"></ul>
+        <div id="drop-zone" class="drop-zone">Tarik & lepas file di sini, atau klik Upload</div>
+        <div id="upload-progress" class="progress" hidden>
+          <div id="upload-progress-bar" class="progress-bar" style="width:0%"></div>
         </div>
+
+        <ul id="file-list" class="list file-list" aria-live="polite"></ul>
       </section>
+    </section>
+  </main>
 
-      <footer class="main-footer">
-        © 2025 Atlantis Store — Clean Cloud Pro
-      </footer>
-    </main>
-  </div>
+  <footer class="footer">
+    <small>© 2025 Atlantis Store</small>
+  </footer>
 
-  <div id="preview-modal" class="modal">
+  <!-- MODALS / TOAST -->
+  <div id="preview-modal" class="modal" hidden>
     <div class="modal-content">
-      <button id="preview-close" class="modal-close material-icons-outlined">close</button>
+      <button class="modal-close" id="preview-close">✖</button>
       <div id="preview-body"></div>
-      <p id="preview-meta"></p>
     </div>
   </div>
+
+  <div id="rename-modal" class="modal" hidden>
+    <div class="modal-content">
+      <button class="modal-close" id="rename-close">✖</button>
+      <h4>Ubah Nama</h4>
+      <form id="rename-form" class="form-inline">
+        <input id="rename-input" type="text" required />
+        <button class="btn btn-sm">Simpan</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
 
   <script type="module" src="app.js"></script>
 </body>
