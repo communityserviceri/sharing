@@ -213,24 +213,41 @@ onAuthStateChanged(auth, async (user) => {
     settingsEmail.value = user.email || "";
     loginSection.style.display = "none";
     appSection.removeAttribute("aria-hidden");
-    // load role from RTDB
+
+    // 🟢 Tambahan: pastikan user sudah ada di RTDB /users
+    const userRef = ref(db, `users/${user.uid}`);
+    const userSnap = await get(userRef);
+    if (!userSnap.exists()) {
+      await set(userRef, {
+        email: user.email,
+        name: user.displayName || "",
+        role: "staff", // default role untuk user baru
+        createdAt: Date.now(),
+      });
+    }
+
+    // load role dari RTDB (ambil dari node user yang baru dibuat juga)
     const role = await loadUserRole(user.uid);
     currentUserRole = role || "staff";
-    // ensure default folders exist
+
+    // pastikan struktur folder default sudah ada
     await initDefaultStructureIfNeeded();
-    // default root
+
+    // set default state UI
     breadcrumbs = [{ id: null, name: "Root" }];
     currentFolder = null;
     activeTab = "files";
     renderBreadcrumbs();
     setActiveTabUI();
-    // start listeners
+
+    // mulai listener realtime
     loadFoldersRealtime();
     loadFilesRealtime();
+
   } else {
+    // user logout / belum login
     currentUser = null;
     currentUserRole = "staff";
-    // remove listeners
     if (folderListenerUnsub) folderListenerUnsub();
     if (fileListenerUnsub) fileListenerUnsub();
     appSection.setAttribute("aria-hidden", "true");
@@ -912,3 +929,4 @@ function loadRecycleBin() {
 })();
 
 safeLog("Atlantis NAS RTDB app.js loaded");
+
