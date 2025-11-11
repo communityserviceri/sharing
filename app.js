@@ -86,6 +86,23 @@ const settingsPanel = document.getElementById("settings-panel");
 const settingsTheme = document.getElementById("settings-theme");
 const settingsEmail = document.getElementById("settings-email");
 
+// --- DOM refs Baru untuk Mobile Menu ---
+const sidebar = document.querySelector(".sidebar");
+const menuToggle = document.getElementById("menu-toggle");
+const menuOverlay = document.getElementById("menu-overlay");
+
+// --- Mobile Menu Toggle Logic ---
+function toggleMenu() {
+    if (!sidebar || !menuToggle || !menuOverlay) return;
+    const isOpen = sidebar.classList.toggle('open');
+    sidebar.setAttribute('aria-hidden', !isOpen);
+    menuOverlay.style.display = isOpen ? "block" : "none";
+    menuToggle.setAttribute('aria-expanded', isOpen);
+}
+
+if (menuToggle) menuToggle.addEventListener('click', toggleMenu);
+if (menuOverlay) menuOverlay.addEventListener('click', toggleMenu); 
+
 // --- Utilities ---
 function showToast(msg) {
   if (!toast) return;
@@ -649,26 +666,53 @@ function ensureBulkControls() {
   bulkControls = el("div", "bulk-controls");
   bulkControls.id = "bulk-controls";
   bulkControls.innerHTML = `
-    <button id="bulk-download" class="btn">⬇️ Download selected</button>
-    <button id="bulk-delete" class="btn danger">🗑️ Delete selected</button>
-    <button id="clear-selection" class="btn">✖ Clear</button>
+    <button id="bulk-download-body" class="btn primary">⬇️ Download selected</button>
+    <button id="bulk-delete-body" class="btn danger">🗑️ Delete selected</button>
+    <button id="clear-selection-body" class="btn">✖ Clear</button>
   `;
   document.body.appendChild(bulkControls);
-  bulkControls.querySelector("#clear-selection").onclick = () => {
+  bulkControls.querySelector("#clear-selection-body").onclick = () => {
     fileList.querySelectorAll(".file-checkbox").forEach((cb) => (cb.checked = false));
     updateBulkSelectionUI();
   };
-  bulkControls.querySelector("#bulk-delete").onclick = bulkDeleteSelected;
-  bulkControls.querySelector("#bulk-download").onclick = bulkDownloadSelected;
+  bulkControls.querySelector("#bulk-delete-body").onclick = bulkDeleteSelected;
+  bulkControls.querySelector("#bulk-download-body").onclick = bulkDownloadSelected;
+  
+  // Attach handlers for the bulk controls in the files-header (which are for desktop)
+  document.getElementById("clear-selection").onclick = () => {
+    fileList.querySelectorAll(".file-checkbox").forEach((cb) => (cb.checked = false));
+    updateBulkSelectionUI();
+  };
+  document.getElementById("bulk-delete").onclick = bulkDeleteSelected;
+  document.getElementById("bulk-download").onclick = bulkDownloadSelected;
+  // document.getElementById("bulk-zip").onclick = () => showToast("Fungsi Zip belum diimplementasikan."); // Dihapus di HTML
+  
   updateBulkSelectionUI();
 }
 
 function updateBulkSelectionUI() {
   const selected = Array.from(fileList.querySelectorAll(".file-checkbox:checked"));
-  if (!bulkControls) return;
-  bulkControls.style.display = selected.length > 0 ? "block" : "none";
-  bulkControls.querySelector("#bulk-download").textContent = `⬇️ Download (${selected.length})`;
-  bulkControls.querySelector("#bulk-delete").textContent = `🗑️ Delete (${selected.length})`;
+  const count = selected.length;
+  const show = count > 0 ? "block" : "none";
+
+  // Bulk control bar di body (mobile/persisten)
+  if (bulkControls) {
+    bulkControls.style.display = show;
+    bulkControls.querySelector("#bulk-download-body").textContent = `⬇️ Download (${count})`;
+    bulkControls.querySelector("#bulk-delete-body").textContent = `🗑️ Delete (${count})`;
+  }
+  
+  // Bulk controls di files-header (desktop) - tidak disembunyikan, hanya tombolnya
+  document.getElementById("bulk-download").textContent = `⬇️`;
+  document.getElementById("bulk-delete").textContent = `🗑️`;
+  document.getElementById("clear-selection").textContent = `✖`;
+  
+  // Sembunyikan/tampilkan tombol di header jika seleksi > 0
+  const headerControls = document.querySelector(".files-header .file-controls");
+  if (headerControls) {
+      headerControls.style.opacity = count > 0 ? "1" : "0.5";
+      headerControls.style.pointerEvents = count > 0 ? "auto" : "none";
+  }
 }
 
 async function bulkDeleteSelected() {
@@ -920,6 +964,9 @@ function setActiveTabUI() {
   tabSettings.classList.toggle("active", activeTab === "settings");
 
   const content = document.querySelector(".content");
+  // Tutup sidebar mobile saat tab diklik
+  if (sidebar && sidebar.classList.contains('open')) toggleMenu();
+
   if (content) content.style.display = activeTab === "files" ? "flex" : "none";
   settingsPanel.setAttribute("aria-hidden", activeTab === "settings" ? "false" : "true");
 
@@ -1023,6 +1070,3 @@ function loadRecycleBin() {
 })();
 
 safeLog("Atlantis NAS RTDB app.js loaded");
-
-
-
