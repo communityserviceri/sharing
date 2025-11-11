@@ -9,7 +9,6 @@
 </head>
 <body>
   <div id="root">
-    <!-- Login -->
     <section id="login-section" class="login-section">
       <div class="login-card">
         <h1 class="logo">🌊 Atlantis NAS</h1>
@@ -24,7 +23,6 @@
       </div>
     </section>
 
-    <!-- App -->
     <div class="app-container" id="app-section" aria-hidden="true">
       <aside class="sidebar">
         <div class="branding">
@@ -49,6 +47,12 @@
 
       <main class="main">
         <header class="topbar">
+          <button id="menu-toggle" class="btn icon menu-btn" aria-label="Toggle Menu">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+          </button>
+          
           <div class="search-area">
             <input id="global-search" type="search" placeholder="Cari file atau folder... (Ctrl/Cmd+K)" />
             <select id="filter-type">
@@ -62,13 +66,13 @@
           </div>
 
           <div class="actions-area">
-            <select id="sort-select">
+            <select id="sort-select" class="desktop-only">
               <option value="createdAt">Terbaru</option>
               <option value="name">Nama</option>
               <option value="size">Ukuran</option>
             </select>
 
-            <button id="toggle-theme" class="btn icon">🌓</button>
+            <button id="toggle-theme" class="btn icon desktop-only">🌓</button>
             <button id="upload-btn" class="btn primary">📤 Upload</button>
             <input id="file-input" type="file" multiple hidden />
           </div>
@@ -80,7 +84,7 @@
               <h3>Folder</h3>
               <form id="folder-form" class="inline-form">
                 <input id="folder-name" type="text" placeholder="Nama folder baru..." required />
-                <button type="submit" class="btn">Tambah</button>
+                <button type="submit" class="btn primary small">Tambah</button>
               </form>
             </div>
 
@@ -92,7 +96,7 @@
               <h3 id="folder-title">🗂 Pilih Folder</h3>
               <div class="file-controls">
                 <button id="bulk-download" class="btn" title="Download terpilih">⬇️</button>
-                <button id="bulk-zip" class="btn" title="Zip terpilih">📦 Zip</button>
+                <button id="bulk-zip" class="btn" title="Zip terpilih">📦</button>
                 <button id="bulk-delete" class="btn danger" title="Hapus terpilih">🗑️</button>
                 <button id="clear-selection" class="btn" title="Clear">✖</button>
               </div>
@@ -106,16 +110,14 @@
           </div>
         </section>
 
-        <!-- Modal Preview -->
         <div id="preview-modal" class="modal" aria-hidden="true">
           <div class="modal-content">
             <button id="close-preview" class="close-modal">✖</button>
             <div id="preview-body"></div>
-            <a id="preview-download" class="btn" href="#" target="_blank">⬇️ Download</a>
+            <a id="preview-download" class="btn primary" href="#" target="_blank">⬇️ Download</a>
           </div>
         </div>
 
-        <!-- Modal Settings -->
         <div id="settings-panel" class="modal" aria-hidden="true">
           <div class="modal-content">
             <h3>Pengaturan</h3>
@@ -129,11 +131,13 @@
             <label>Email:
               <input id="settings-email" readonly />
             </label>
-            <button id="close-settings" class="btn">Tutup</button>
+            <button id="close-settings" class="btn primary">Tutup</button>
           </div>
         </div>
 
         <div id="toast" class="toast"></div>
+        
+        <div id="menu-overlay" aria-hidden="true"></div>
       </main>
     </div>
   </div>
@@ -141,5 +145,3 @@
   <script type="module" src="app.js"></script>
 </body>
 </html>
-
-
