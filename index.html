@@ -4,140 +4,189 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Atlantis NAS v3.0</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css" />
   <link rel="icon" type="image/png" href="logo.png">
 </head>
 <body>
   <div id="root">
-    <section id="login-section" class="login-section">
-      <div class="login-card">
-        <h1 class="logo">🌊 Atlantis NAS</h1>
-        <p class="muted">Masuk dengan akun <code>@atlantis.com</code></p>
-        <form id="login-form">
-          <input id="login-email" type="email" placeholder="Email @atlantis.com" required />
-          <input id="login-password" type="password" placeholder="Kata sandi" required />
-          <button type="submit" class="btn primary">Masuk</button>
-          <p id="login-error" class="error-text"></p>
-        </form>
-        <small class="muted">Jalankan di <code>http://localhost:...</code> untuk modul ES.</small>
+    <section id="login-section" class="login-wrapper">
+      <div class="login-container">
+        <div class="login-left">
+          <div class="brand">
+            <h1>🌊 Atlantis NAS</h1>
+            <p>Secure Cloud Storage & Workspace</p>
+          </div>
+        </div>
+        <div class="login-right">
+          <div class="login-form-box">
+            <h2>Welcome Back</h2>
+            <p class="muted">Enter your credentials to access the drive.</p>
+            <form id="login-form">
+              <div class="input-group">
+                <label>Email Address</label>
+                <input id="login-email" type="email" placeholder="name@atlantis.com" required />
+              </div>
+              <div class="input-group">
+                <label>Password</label>
+                <input id="login-password" type="password" placeholder="••••••••" required />
+              </div>
+              <button type="submit" class="btn primary full-width">Sign In</button>
+              <p id="login-error" class="error-text"></p>
+            </form>
+          </div>
+        </div>
       </div>
     </section>
 
-    <div class="app-container" id="app-section" aria-hidden="true">
+    <div class="app-layout" id="app-section" aria-hidden="true">
+      
       <aside class="sidebar">
-        <div class="branding">
-          <h2>🌊 Atlantis NAS</h2>
+        <div class="sidebar-header">
+          <div class="logo-area">
+            <span class="logo-icon">🌊</span>
+            <h3>Atlantis</h3>
+          </div>
         </div>
 
-        <div class="user-block">
-          <div id="user-info" class="user-email">-</div>
-          <button id="logout-btn" class="btn danger small">Keluar</button>
-        </div>
+        <div class="sidebar-content">
+          <div class="user-card">
+            <div class="avatar-placeholder" id="user-avatar">U</div>
+            <div class="user-details">
+              <span id="user-info" class="user-email">Loading...</span>
+              <span class="user-role-badge">Workspace</span>
+            </div>
+          </div>
 
-        <nav class="nav">
-          <button id="tab-files" class="nav-btn active">📁 Files</button>
-          <button id="tab-recycle" class="nav-btn">🗑️ Recycle Bin</button>
-          <button id="tab-settings" class="nav-btn">⚙️ Settings</button>
-        </nav>
+          <nav class="nav-menu">
+            <p class="nav-label">MENU</p>
+            <button id="tab-files" class="nav-item active">
+              <span class="icon">📁</span> My Files
+            </button>
+            <button id="tab-recycle" class="nav-item">
+              <span class="icon">🗑️</span> Recycle Bin
+            </button>
+            <button id="tab-settings" class="nav-item">
+              <span class="icon">⚙️</span> Settings
+            </button>
+          </nav>
+        </div>
 
         <div class="sidebar-footer">
-          <small class="muted">Atlantis NAS v3.0</small>
+          <button id="logout-btn" class="btn text-danger">
+            <span class="icon">🚪</span> Sign Out
+          </button>
         </div>
       </aside>
 
-      <main class="main">
+      <main class="main-content">
         <header class="topbar">
-          <button id="menu-toggle" class="btn icon menu-btn" aria-label="Toggle Menu">
-            <span class="icon-bar"></span>
-            <span class="icon-bar"></span>
-            <span class="icon-bar"></span>
+          <button id="menu-toggle" class="btn icon-only mobile-only">
+            <span class="hamburger">☰</span>
           </button>
           
-          <div class="search-area">
-            <input id="global-search" type="search" placeholder="Cari file atau folder... (Ctrl/Cmd+K)" />
-            <select id="filter-type">
-              <option value="all">Semua tipe</option>
-              <option value="image">Images</option>
-              <option value="video">Video</option>
-              <option value="pdf">PDF</option>
-              <option value="archive">Archive</option>
-              <option value="doc">Document</option>
-            </select>
-          </div>
+          <div class="breadcrumbs-container" id="breadcrumb">
+            </div>
 
-          <div class="actions-area">
-            <select id="sort-select" class="desktop-only">
-              <option value="createdAt">Terbaru</option>
-              <option value="name">Nama</option>
-              <option value="size">Ukuran</option>
-            </select>
-
-            <button id="toggle-theme" class="btn icon desktop-only">🌓</button>
-            <button id="upload-btn" class="btn primary">📤 Upload</button>
-            <input id="file-input" type="file" multiple hidden />
+          <div class="topbar-actions">
+            <div class="search-bar">
+              <span class="search-icon">🔍</span>
+              <input id="global-search" type="search" placeholder="Search files (Ctrl+K)" />
+            </div>
+            <button id="upload-btn" class="btn primary glow">
+              <span class="plus">+</span> Upload
+              <input id="file-input" type="file" multiple hidden />
+            </button>
+            <button id="toggle-theme" class="btn icon-only secondary">🌓</button>
           </div>
         </header>
 
-        <section class="content">
-          <div class="left-col">
-            <div class="folders-header">
-              <h3>Folder</h3>
-              <form id="folder-form" class="inline-form">
-                <input id="folder-name" type="text" placeholder="Nama folder baru..." required />
-                <button type="submit" class="btn primary small">Tambah</button>
+        <div class="content-wrapper">
+          
+          <div class="section-folders">
+            <div class="section-header">
+              <h3>Folders</h3>
+              <form id="folder-form" class="mini-form">
+                <input id="folder-name" type="text" placeholder="New Folder Name" required />
+                <button type="submit" class="btn small secondary">Add</button>
               </form>
             </div>
-
-            <div id="folder-list" class="folder-grid" aria-label="Daftar folder"></div>
+            <div id="folder-list" class="folder-grid"></div>
           </div>
 
-          <div class="right-col">
-            <div class="files-header">
-              <h3 id="folder-title">🗂 Pilih Folder</h3>
-              <div class="file-controls">
-                <button id="bulk-download" class="btn" title="Download terpilih">⬇️</button>
-                <button id="bulk-zip" class="btn" title="Zip terpilih">📦</button>
-                <button id="bulk-delete" class="btn danger" title="Hapus terpilih">🗑️</button>
-                <button id="clear-selection" class="btn" title="Clear">✖</button>
+          <div class="section-files">
+            <div class="files-toolbar">
+              <h3 id="folder-title">All Files</h3>
+              <div class="bulk-actions-toolbar" id="header-bulk-actions">
+                <button id="bulk-download" class="btn icon-text small">⬇️</button>
+                <button id="bulk-delete" class="btn icon-text danger small">🗑️</button>
+                <button id="clear-selection" class="btn icon-text small">✖</button>
               </div>
             </div>
 
-            <div id="drop-area" class="drop-area">
-              <p>Tarik & lepas file di sini, atau klik Upload</p>
+            <div id="drop-area" class="drop-zone">
+              <div class="drop-content">
+                <span class="drop-icon">☁️</span>
+                <p>Drag & Drop files here to upload</p>
+              </div>
             </div>
 
-            <ul id="file-list" class="file-list" aria-live="polite"></ul>
-          </div>
-        </section>
+            <div class="file-table-header">
+              <div class="col-check"></div>
+              <div class="col-name">Name</div>
+              <div class="col-size">Size</div>
+              <div class="col-date">Date Modified</div>
+              <div class="col-action"></div>
+            </div>
 
-        <div id="preview-modal" class="modal" aria-hidden="true">
-          <div class="modal-content">
-            <button id="close-preview" class="close-modal">✖</button>
-            <div id="preview-body"></div>
-            <a id="preview-download" class="btn primary" href="#" target="_blank">⬇️ Download</a>
-          </div>
-        </div>
-
-        <div id="settings-panel" class="modal" aria-hidden="true">
-          <div class="modal-content">
-            <h3>Pengaturan</h3>
-            <label>Theme:
-              <select id="settings-theme">
-                <option value="auto">Auto</option>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
-            </label>
-            <label>Email:
-              <input id="settings-email" readonly />
-            </label>
-            <button id="close-settings" class="btn primary">Tutup</button>
+            <div class="file-scroller">
+              <ul id="file-list" class="file-table-body"></ul>
+            </div>
           </div>
         </div>
 
-        <div id="toast" class="toast"></div>
-        
-        <div id="menu-overlay" aria-hidden="true"></div>
+        <div id="preview-modal" class="modal-overlay" aria-hidden="true">
+          <div class="modal-card preview-card">
+            <div class="modal-header">
+              <h4>File Preview</h4>
+              <button id="close-preview" class="btn icon-only">✕</button>
+            </div>
+            <div id="preview-body" class="preview-body"></div>
+            <div class="modal-footer">
+              <a id="preview-download" class="btn primary" href="#" target="_blank">Download File</a>
+            </div>
+          </div>
+        </div>
+
+        <div id="settings-panel" class="modal-overlay" aria-hidden="true">
+          <div class="modal-card settings-card">
+            <div class="modal-header">
+              <h4>Settings</h4>
+            </div>
+            <div class="modal-body">
+              <div class="form-group">
+                <label>Appearance</label>
+                <select id="settings-theme" class="select-input">
+                  <option value="auto">System Default</option>
+                  <option value="light">Light Mode</option>
+                  <option value="dark">Dark Mode</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Account Email</label>
+                <input id="settings-email" class="input-readonly" readonly />
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button id="close-settings" class="btn secondary">Close</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="toast" class="toast-notification"></div>
+        <div id="menu-overlay" class="mobile-overlay" aria-hidden="true"></div>
       </main>
     </div>
   </div>
